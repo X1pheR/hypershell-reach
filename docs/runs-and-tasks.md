@@ -64,7 +64,27 @@ flowchart LR
 
 A task is not the same as a project. One project can use zero or more tasks, and a task can exist without a project.
 
-Task persistence and lifecycle tools are implemented in the next Phase 3 batch. Execution inputs already reserve an optional `task_id` so runs can be linked once that task exists.
+Task state is stored as:
+
+```text
+tasks/<task-id>/
+├── task.yaml
+└── evidence/
+```
+
+HATS creates the evidence directory as a bounded place for deployment-specific evidence workflows. The v1 MCP surface does not provide an arbitrary evidence-file writer.
+
+Task states are `active`, `partial`, `blocked`, `completed` and `cancelled`. Only the first three accept new linked runs. Terminal task state cannot be reopened through `update_task`.
+
+Task tools:
+
+- `list_tasks` returns current tasks and can optionally include archived tasks;
+- `get_task` returns one current or archived task;
+- `create_task` creates continuity state without executing remotely;
+- `update_task` changes current task metadata or state;
+- `archive_task` moves a completed or cancelled task to the configured trash root.
+
+Archival is an atomic same-filesystem directory move. A repeated archive call is idempotent. HATS does not expose a hard-delete task tool.
 
 ## Retention
 
@@ -79,4 +99,4 @@ A completed run can be deleted automatically only when all conditions are true:
 
 `running`, `interrupted`, `unknown` and ambiguous records are never removed by run cleanup.
 
-Task retention applies only after task archival and is implemented with the task lifecycle.
+Archived task cleanup applies only when `retention.tasks.archived_days` is set, the task is terminal, `retained=false` and `archived_at` is older than the threshold. Current tasks are never deleted by task cleanup.

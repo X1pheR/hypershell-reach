@@ -17,7 +17,7 @@ flowchart LR
     HATS --> Skills[Skill sources]
 ```
 
-The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts and persistent run metadata. Tasks and skills are added as separate modules on the same service.
+The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata and task continuity. Skills are added as a separate module on the same service.
 
 ## Design
 
@@ -67,10 +67,15 @@ HATS currently exposes:
 - `list_runs`
 - `get_run`
 - `set_run_retained`
+- `list_tasks`
+- `get_task`
+- `create_task`
+- `update_task`
+- `archive_task`
 - `run_command`
 - `run_shell`
 
-Later phases add durable task continuity and Agent Skills without turning skill content into executable tooling.
+The skills phase adds Agent Skills without turning skill content into executable tooling.
 
 See [Tool contracts](docs/tools.md) and [Skills](docs/skills.md).
 

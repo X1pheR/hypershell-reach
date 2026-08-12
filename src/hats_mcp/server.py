@@ -14,10 +14,12 @@ from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .runs import RunOperation, RunStatus, RunStore
+from .tasks import TaskStatus, TaskStore
 
 app = Server("hats")
 _config: HATSConfig
 _run_store_instance: RunStore | None = None
+_task_store_instance: TaskStore | None = None
 
 
 class EmptyInput(BaseModel):
@@ -79,6 +81,50 @@ class RetainRunInput(BaseModel):
     retained: bool
 
 
+class ListTasksInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: TaskStatus | None = None
+    include_archived: bool = False
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class GetTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+
+
+class CreateTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    objective: str = Field(min_length=1, max_length=4_000)
+    project_ref: str | None = Field(default=None, min_length=1, max_length=256)
+    next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
+    retained: bool = False
+
+
+class UpdateTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    objective: str | None = Field(default=None, min_length=1, max_length=4_000)
+    project_ref: str | None = Field(default=None, min_length=1, max_length=256)
+    clear_project_ref: bool = False
+    status: TaskStatus | None = None
+    next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
+    clear_next_action: bool = False
+    retained: bool | None = None
+
+
+class ArchiveTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+
+
 def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
     target = _config.enabled_target(target_id)
     max_timeout = _config.resolved_max_timeout(target)
@@ -108,6 +154,18 @@ def _run_store() -> RunStore:
     return _run_store_instance
 
 
+def _task_store() -> TaskStore:
+    global _task_store_instance
+    if _task_store_instance is None:
+        _task_store_instance = TaskStore(
+            _config.workspace.tasks,
+            _config.workspace.trash,
+            archived_days=_config.retention.tasks.archived_days,
+        )
+        _task_store_instance.cleanup()
+    return _task_store_instance
+
+
 async def _tracked_ssh_run(
     *,
     operation: RunOperation,
@@ -125,6 +183,8 @@ async def _tracked_ssh_run(
     script_sha256: str | None = None,
     argument_names: list[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
+    if task_id is not None:
+        _task_store().require_open(task_id)
     store = _run_store()
     record = store.create(
         operation=operation,
@@ -245,6 +305,72 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="list_tasks",
+            description=(
+                "List HATS task-continuity records. Tasks are local continuity state, not "
+                "projects or execution authorization."
+            ),
+            inputSchema=ListTasksInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="get_task",
+            description="Return one HATS task-continuity record.",
+            inputSchema=GetTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="create_task",
+            description=(
+                "Create durable local continuity state for substantial or interruption-prone "
+                "work. This does not execute a remote operation."
+            ),
+            inputSchema=CreateTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="update_task",
+            description=(
+                "Update one current HATS task record. Terminal task status cannot be reopened."
+            ),
+            inputSchema=UpdateTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="archive_task",
+            description=(
+                "Move one completed or cancelled HATS task from the active task root to the "
+                "configured trash root. The move is reversible outside this API."
+            ),
+            inputSchema=ArchiveTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="run_script",
             description=(
                 "Run one registered managed script on a compatible configured target. "
@@ -340,6 +466,47 @@ async def call_tool(
         elif name == "set_run_retained":
             args = RetainRunInput(**arguments)
             result = _run_store().set_retained(args.run_id, args.retained).model_dump()
+        elif name == "list_tasks":
+            args = ListTasksInput(**arguments)
+            _task_store().cleanup()
+            result = {
+                "tasks": [
+                    record.summary()
+                    for record in _task_store().list(
+                        status=args.status,
+                        include_archived=args.include_archived,
+                        limit=args.limit,
+                    )
+                ]
+            }
+        elif name == "get_task":
+            args = GetTaskInput(**arguments)
+            result = _task_store().get(args.task_id).model_dump()
+        elif name == "create_task":
+            args = CreateTaskInput(**arguments)
+            result = _task_store().create(
+                title=args.title,
+                objective=args.objective,
+                project_ref=args.project_ref,
+                next_action=args.next_action,
+                retained=args.retained,
+            ).model_dump()
+        elif name == "update_task":
+            args = UpdateTaskInput(**arguments)
+            result = _task_store().update(
+                args.task_id,
+                title=args.title,
+                objective=args.objective,
+                project_ref=args.project_ref,
+                clear_project_ref=args.clear_project_ref,
+                status=args.status,
+                next_action=args.next_action,
+                clear_next_action=args.clear_next_action,
+                retained=args.retained,
+            ).model_dump()
+        elif name == "archive_task":
+            args = ArchiveTaskInput(**arguments)
+            result = _task_store().archive(args.task_id).model_dump()
         elif name == "run_script":
             args = RunScriptInput(**arguments)
             script = _tool_registry().get(args.script_id)
@@ -428,13 +595,19 @@ async def call_tool(
 async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
-    global _config, _run_store_instance
+    global _config, _run_store_instance, _task_store_instance
     _config = load_config()
     _run_store_instance = RunStore(
         _config.workspace.runs,
         completed_days=_config.retention.runs.completed_days,
     )
     _run_store_instance.cleanup()
+    _task_store_instance = TaskStore(
+        _config.workspace.tasks,
+        _config.workspace.trash,
+        archived_days=_config.retention.tasks.archived_days,
+    )
+    _task_store_instance.cleanup()
 
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())

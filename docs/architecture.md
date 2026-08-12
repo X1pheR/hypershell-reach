@@ -13,7 +13,7 @@ flowchart LR
     Targets --> SSH[SSH execution]
     Tools --> SSH
     Server --> Runs[Run state]
-    Server -. phase 3 .-> Tasks[Task state]
+    Server --> Tasks[Task state]
     Server -. phase 5 .-> Skills[Skill sources]
 ```
 
