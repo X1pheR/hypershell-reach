@@ -13,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
+from .runs import RunOperation, RunStatus, RunStore
 
 app = Server("hats")
 _config: HATSConfig
+_run_store_instance: RunStore | None = None
 
 
 class EmptyInput(BaseModel):
@@ -28,6 +30,7 @@ class CommandInput(BaseModel):
     target: str = Field(min_length=1, max_length=63)
     command: str = Field(min_length=1, max_length=65_536)
     timeout_seconds: int = Field(default=45, ge=1, le=900)
+    task_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ShellInput(BaseModel):
@@ -37,6 +40,7 @@ class ShellInput(BaseModel):
     interpreter: Literal["sh", "bash"] = "sh"
     script: str = Field(min_length=1, max_length=262_144)
     timeout_seconds: int = Field(default=90, ge=1, le=900)
+    task_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class GetScriptInput(BaseModel):
@@ -51,6 +55,28 @@ class RunScriptInput(BaseModel):
     script_id: str = Field(min_length=3, max_length=190)
     target: str = Field(min_length=1, max_length=63)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ListRunsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: RunStatus | None = None
+    task_id: str | None = Field(default=None, min_length=1, max_length=128)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class GetRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=128)
+
+
+class RetainRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=128)
+    retained: bool
 
 
 def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
@@ -69,6 +95,69 @@ def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, i
 
 def _tool_registry():
     return load_tool_registry(_config.sources.tools)
+
+
+def _run_store() -> RunStore:
+    global _run_store_instance
+    if _run_store_instance is None:
+        _run_store_instance = RunStore(
+            _config.workspace.runs,
+            completed_days=_config.retention.runs.completed_days,
+        )
+        _run_store_instance.cleanup()
+    return _run_store_instance
+
+
+async def _tracked_ssh_run(
+    *,
+    operation: RunOperation,
+    target_id: str,
+    target: Any,
+    remote_command: str,
+    timeout_seconds: int,
+    connect_timeout_seconds: int,
+    max_output_bytes: int,
+    may_mutate: bool,
+    task_id: str | None = None,
+    stdin_text: str | None = None,
+    script_id: str | None = None,
+    script_source: str | None = None,
+    script_sha256: str | None = None,
+    argument_names: list[str] | None = None,
+) -> tuple[str, dict[str, object]]:
+    store = _run_store()
+    record = store.create(
+        operation=operation,
+        target=target_id,
+        task_id=task_id,
+        script_id=script_id,
+        script_source=script_source,
+        script_sha256=script_sha256,
+        argument_names=argument_names,
+        timeout_seconds=timeout_seconds,
+        may_mutate=may_mutate,
+    )
+    try:
+        execution = await run_ssh(
+            target_id=target_id,
+            target=target,
+            remote_command=remote_command,
+            timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=connect_timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            stdin_text=stdin_text,
+        )
+    except asyncio.CancelledError:
+        store.interrupt(record.id)
+        raise
+    except (ValueError, RuntimeError) as exc:
+        store.fail_local(record.id, type(exc).__name__)
+        raise
+    except Exception as exc:
+        store.mark_unknown(record.id, type(exc).__name__)
+        raise
+    store.finish(record.id, execution)
+    return record.id, execution
 
 
 @app.list_tools()
@@ -111,6 +200,45 @@ async def list_tools() -> list[types.Tool]:
             inputSchema=GetScriptInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="list_runs",
+            description=(
+                "List persisted HATS execution records. Run records contain bounded metadata, "
+                "not command text, scripts, argument values or output content."
+            ),
+            inputSchema=ListRunsInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="get_run",
+            description="Return one persisted HATS execution record without execution content.",
+            inputSchema=GetRunInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="set_run_retained",
+            description=(
+                "Set or clear the retention override for one run record. This changes only local "
+                "HATS state and does not execute a remote operation."
+            ),
+            inputSchema=RetainRunInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
                 destructiveHint=False,
                 idempotentHint=True,
                 openWorldHint=False,
@@ -193,6 +321,25 @@ async def call_tool(
         elif name == "get_script":
             args = GetScriptInput(**arguments)
             result = _tool_registry().get(args.script_id).detail()
+        elif name == "list_runs":
+            args = ListRunsInput(**arguments)
+            _run_store().cleanup()
+            result = {
+                "runs": [
+                    record.summary()
+                    for record in _run_store().list(
+                        status=args.status,
+                        task_id=args.task_id,
+                        limit=args.limit,
+                    )
+                ]
+            }
+        elif name == "get_run":
+            args = GetRunInput(**arguments)
+            result = _run_store().get(args.run_id).model_dump()
+        elif name == "set_run_retained":
+            args = RetainRunInput(**arguments)
+            result = _run_store().set_retained(args.run_id, args.retained).model_dump()
         elif name == "run_script":
             args = RunScriptInput(**arguments)
             script = _tool_registry().get(args.script_id)
@@ -200,16 +347,24 @@ async def call_tool(
                 args.target, script.metadata.timeout_seconds
             )
             ensure_target_compatible(script, target.capabilities)
-            execution = await run_ssh(
+            run_id, execution = await _tracked_ssh_run(
+                operation="run_script",
                 target_id=args.target,
                 target=target,
                 remote_command=build_script_command(script, args.arguments),
                 timeout_seconds=script.metadata.timeout_seconds,
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
+                may_mutate=script.metadata.mutating,
+                task_id=args.task_id,
                 stdin_text=script.content,
+                script_id=script.metadata.id,
+                script_source=script.source_id,
+                script_sha256=script.sha256,
+                argument_names=list(args.arguments),
             )
             result = {
+                "run_id": run_id,
                 "script_id": script.metadata.id,
                 "source": script.source_id,
                 "sha256": script.sha256,
@@ -222,28 +377,36 @@ async def call_tool(
             target, connect_timeout, max_output = _target_runtime(
                 args.target, args.timeout_seconds
             )
-            result = await run_ssh(
+            run_id, execution = await _tracked_ssh_run(
+                operation="run_command",
                 target_id=args.target,
                 target=target,
                 remote_command=args.command,
                 timeout_seconds=args.timeout_seconds,
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
+                may_mutate=True,
+                task_id=args.task_id,
             )
+            result = {"run_id": run_id, "execution": execution}
         elif name == "run_shell":
             args = ShellInput(**arguments)
             target, connect_timeout, max_output = _target_runtime(
                 args.target, args.timeout_seconds
             )
-            result = await run_ssh(
+            run_id, execution = await _tracked_ssh_run(
+                operation="run_shell",
                 target_id=args.target,
                 target=target,
                 remote_command=f"{args.interpreter} -s --",
                 timeout_seconds=args.timeout_seconds,
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
+                may_mutate=True,
+                task_id=args.task_id,
                 stdin_text=args.script,
             )
+            result = {"run_id": run_id, "execution": execution}
         else:
             raise ValueError(f"unknown tool: {name}")
     except ValidationError as exc:
@@ -265,8 +428,13 @@ async def call_tool(
 async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
-    global _config
+    global _config, _run_store_instance
     _config = load_config()
+    _run_store_instance = RunStore(
+        _config.workspace.runs,
+        completed_days=_config.retention.runs.completed_days,
+    )
+    _run_store_instance.cleanup()
 
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())

@@ -2,8 +2,15 @@ schema_version: 1
 
 workspace:
   tmp: /var/tmp/hats
+  runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
+
+retention:
+  runs:
+    completed_days: null
+  tasks:
+    archived_days: null
 
 defaults:
   connect_timeout_seconds: 10

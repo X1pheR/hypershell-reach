@@ -25,15 +25,35 @@ class Workspace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tmp: str
+    runs: str
     tasks: str
     trash: str
 
-    @field_validator("tmp", "tasks", "trash")
+    @field_validator("tmp", "runs", "tasks", "trash")
     @classmethod
     def require_absolute_paths(cls, value: str) -> str:
         if not Path(value).is_absolute():
             raise ValueError("workspace paths must be absolute")
         return value
+
+
+class RunRetention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completed_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class TaskRetention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    archived_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class Retention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runs: RunRetention = Field(default_factory=RunRetention)
+    tasks: TaskRetention = Field(default_factory=TaskRetention)
 
 
 class ToolSource(BaseModel):
@@ -131,6 +151,7 @@ class HATSConfig(BaseModel):
     schema_version: Literal[1]
     workspace: Workspace
     defaults: Defaults = Field(default_factory=Defaults)
+    retention: Retention = Field(default_factory=Retention)
     sources: Sources = Field(default_factory=Sources)
     targets: dict[str, Target]
 

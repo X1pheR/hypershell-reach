@@ -19,11 +19,24 @@ Unknown fields fail validation.
 ```yaml
 workspace:
   tmp: /var/tmp/hats
+  runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
 ```
 
-All workspace paths are explicit absolute paths. They are reserved for later run/task state and do not contain managed tool sources.
+All workspace paths are explicit absolute paths. `runs` stores automatic execution metadata; `tasks` and `trash` are reserved for task continuity. Managed tool sources stay separate.
+
+## Retention
+
+```yaml
+retention:
+  runs:
+    completed_days: null
+  tasks:
+    archived_days: null
+```
+
+`null` disables automatic cleanup. Run cleanup never removes ambiguous, interrupted, unknown or explicitly retained records. Task cleanup is added with the task lifecycle.
 
 ## Execution defaults
 

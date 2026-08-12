@@ -38,9 +38,10 @@ def _config(tool_root: Path) -> HATSConfig:
         {
             "schema_version": 1,
             "workspace": {
-                "tmp": "/tmp/hats",
-                "tasks": "/var/lib/hats/tasks",
-                "trash": "/var/lib/hats/trash",
+                "tmp": str(tool_root / "tmp"),
+                "runs": str(tool_root / "runs"),
+                "tasks": str(tool_root / "tasks"),
+                "trash": str(tool_root / "trash"),
             },
             "sources": {"tools": [{"id": "local", "path": str(tool_root)}]},
             "targets": {
@@ -64,6 +65,7 @@ async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, mo
     script_path = tmp_path / "echo.sh"
     _write_script(script_path)
     monkeypatch.setattr(server, "_config", _config(tmp_path), raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", None)
     captured = {}
 
     async def fake_run_ssh(**kwargs):

@@ -12,7 +12,8 @@ flowchart LR
     Server --> Tools[Managed tool registry]
     Targets --> SSH[SSH execution]
     Tools --> SSH
-    Server -. phase 3 .-> State[Runs and tasks]
+    Server --> Runs[Run state]
+    Server -. phase 3 .-> Tasks[Task state]
     Server -. phase 5 .-> Skills[Skill sources]
 ```
 

@@ -11,6 +11,7 @@ def _config() -> dict:
         "schema_version": 1,
         "workspace": {
             "tmp": "/tmp/hats",
+            "runs": "/var/lib/hats/runs",
             "tasks": "/var/lib/hats/tasks",
             "trash": "/var/lib/hats/trash",
         },
@@ -67,6 +68,7 @@ def test_yaml_config_loads(tmp_path) -> None:
         """schema_version: 1
 workspace:
   tmp: /tmp/hats
+  runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
 targets:
