@@ -37,7 +37,7 @@ The server resolves the exact registered script, validates arguments, checks req
 
 The script-owned `timeout_seconds` cannot exceed the configured target maximum. Scripts are never retried automatically.
 
-Arguments become deterministic `--kebab-name value` pairs in metadata order. String values are shell-quoted by HATS before the remote interpreter is invoked. The caller cannot supply raw argv.
+Arguments become deterministic `--kebab-name value` pairs in metadata order. `string_list` values repeat the same flag once per item, preserving list order. String values are shell-quoted by HATS before the remote interpreter is invoked. The caller cannot supply raw argv.
 
 ## Script frontmatter
 
@@ -82,11 +82,11 @@ The interpreter adds its own required capability automatically. A Bash script th
 
 ### Arguments
 
-Supported v1 types are `string`, `integer` and `boolean`.
+Supported v1 types are `string`, `string_list`, `integer` and `boolean`.
 
-String arguments may define `enum`, `pattern`, `min_length` and `max_length`. Integer arguments may define `minimum` and `maximum`. Optional arguments are omitted from argv when absent. Unknown arguments fail validation.
+String and `string_list` items may define `enum`, `pattern`, `min_length` and `max_length`. A `string_list` may additionally define `min_items` and `max_items`; absent bounds default to 1 and 64. HATS serializes each item as a repeated flag rather than flattening the list into one string. Integer arguments may define `minimum` and `maximum`. Optional arguments are omitted from argv when absent. Unknown arguments fail validation.
 
-Strings without an explicit `max_length` are limited to 4096 characters.
+Strings and list items without an explicit `max_length` are limited to 4096 characters.
 
 ## Source safety
 
@@ -113,6 +113,16 @@ Produces a bounded read-only Git work-tree summary. It uses a temporary `HOME`, 
 The caller supplies an absolute repository path and may bound status and `diff --check` diagnostics or require a clean work tree. The result includes branch/HEAD/upstream state, ahead/behind counts, staged/unstaged/untracked/conflict counts, bounded status and diagnostics, and compact-stat line counts. The tool writes no result file; MCP output and HATS Run state own transport and execution metadata.
 
 Exit `0` means the requested Git policy passed, `1` means the repository is dirty when cleanliness was required or `diff --check` failed, and `2` means preflight or local Git execution failed.
+
+### `filesystem.snapshot-modes`
+
+Writes the existing `agent-tooling-file-modes-v1` tab-separated mode/type contract for one to 256 explicit absolute paths. The target paths themselves are never modified, but creating or replacing the snapshot file is a mutation, so this tool is intentionally separate from comparison and is recorded by HATS with `mutating=true` and `idempotent=false`. Existing snapshots are refused unless `force=true` is explicitly supplied.
+
+### `filesystem.compare-modes`
+
+Reads an `agent-tooling-file-modes-v1` snapshot and compares up to 256 entries against current mode/type state without mutation. Legacy v1 snapshots remain compatible. Exit `0` means every entry matches, `1` means one or more mode/type mismatches were detected, and `2` means the snapshot contract or local read boundary is invalid.
+
+Unlike the legacy helper, comparison returns JSON only through stdout; HATS owns output transport and Run metadata, so a second `--json-output` write path is unnecessary.
 
 ## Raw execution
 

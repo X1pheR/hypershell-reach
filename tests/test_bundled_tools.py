@@ -13,6 +13,8 @@ BUNDLED_SOURCE = ToolSource(id="hats", type="bundled")
 ROOT = Path(__file__).parents[1]
 PERFORMANCE_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/performance/host-preflight.py"
 GIT_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/git/summary-bounded.py"
+SNAPSHOT_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/snapshot-modes.py"
+COMPARE_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/compare-modes.py"
 
 
 def _load(name: str, path: Path):
@@ -25,6 +27,8 @@ def _load(name: str, path: Path):
 
 performance = _load("performance_host_preflight", PERFORMANCE_SCRIPT)
 git_summary = _load("git_summary_bounded", GIT_SCRIPT)
+snapshot_modes = _load("filesystem_snapshot_modes", SNAPSHOT_MODES_SCRIPT)
+compare_modes = _load("filesystem_compare_modes", COMPARE_MODES_SCRIPT)
 
 
 def _git(repo: Path, *arguments: str) -> None:
@@ -59,7 +63,12 @@ def test_bundled_source_resolves_inside_package() -> None:
 def test_bundled_registry_contains_expected_tools() -> None:
     scripts = {script.metadata.id: script for script in load_tool_registry([BUNDLED_SOURCE]).list()}
 
-    assert set(scripts) == {"git.summary-bounded", "performance.host-preflight"}
+    assert set(scripts) == {
+        "filesystem.compare-modes",
+        "filesystem.snapshot-modes",
+        "git.summary-bounded",
+        "performance.host-preflight",
+    }
 
     performance_script = scripts["performance.host-preflight"]
     assert performance_script.source_id == "hats"
@@ -77,6 +86,23 @@ def test_bundled_registry_contains_expected_tools() -> None:
         "docker",
         "top_containers",
     ]
+
+    snapshot_script = scripts["filesystem.snapshot-modes"]
+    assert snapshot_script.metadata.mutating is True
+    assert snapshot_script.metadata.idempotent is False
+    assert snapshot_script.metadata.required_capabilities() == ["linux", "python3"]
+    assert [argument.name for argument in snapshot_script.metadata.arguments] == [
+        "output",
+        "force",
+        "path",
+    ]
+    assert snapshot_script.metadata.arguments[2].type == "string_list"
+    assert snapshot_script.metadata.arguments[2].max_items == 256
+
+    compare_script = scripts["filesystem.compare-modes"]
+    assert compare_script.metadata.mutating is False
+    assert compare_script.metadata.idempotent is True
+    assert compare_script.metadata.required_capabilities() == ["linux", "python3"]
 
     git_script = scripts["git.summary-bounded"]
     assert git_script.source_id == "hats"
@@ -168,6 +194,58 @@ def test_git_summary_dirty_fixture_is_bounded_and_fails_policy(tmp_path: Path) -
     assert payload["diagnostic_count"] >= 1
     assert len(payload["diagnostics"]) <= 5
     assert payload["untracked_count"] == 12
+
+
+def test_mode_snapshot_and_compare_detect_regression(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture.sh"
+    contract = tmp_path / "modes.tsv"
+    fixture.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fixture.chmod(0o755)
+
+    snapshot_payload, snapshot_exit = snapshot_modes.snapshot(contract, [fixture], False)
+    assert snapshot_exit == 0
+    assert snapshot_payload["entries"] == 1
+    assert contract.read_text(encoding="utf-8") == (
+        f"# agent-tooling-file-modes-v1\n755\tfile\t{fixture}\n"
+    )
+
+    fixture.chmod(0o644)
+    mismatch_payload, mismatch_exit = compare_modes.compare(contract)
+    assert mismatch_exit == 1
+    assert mismatch_payload["checked"] == 1
+    assert mismatch_payload["mismatches"] == 1
+    assert mismatch_payload["details"] == [
+        {
+            "path": str(fixture),
+            "expected_mode": "755",
+            "actual_mode": "644",
+            "expected_type": "file",
+            "actual_type": "file",
+        }
+    ]
+
+    fixture.chmod(0o755)
+    match_payload, match_exit = compare_modes.compare(contract)
+    assert match_exit == 0
+    assert match_payload["mismatches"] == 0
+    assert match_payload["details"] == []
+
+
+def test_mode_compare_accepts_legacy_v1_snapshot(tmp_path: Path) -> None:
+    fixture = tmp_path / "dir"
+    fixture.mkdir()
+    fixture.chmod(0o750)
+    contract = tmp_path / "legacy.tsv"
+    contract.write_text(
+        f"# agent-tooling-file-modes-v1\n750\tdirectory\t{fixture}\n",
+        encoding="utf-8",
+    )
+
+    payload, exit_code = compare_modes.compare(contract)
+
+    assert exit_code == 0
+    assert payload["checked"] == 1
+    assert payload["mismatches"] == 0
 
 
 def test_git_summary_rejects_non_repository(tmp_path: Path) -> None:

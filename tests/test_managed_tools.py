@@ -100,6 +100,46 @@ def test_typed_arguments_build_stable_quoted_argv(tmp_path) -> None:
     ]
 
 
+def test_string_list_arguments_repeat_the_same_flag(tmp_path) -> None:
+    script_path = tmp_path / "inspect.py"
+    script_path.write_text(
+        """#!/usr/bin/env python3
+# ---
+# id: filesystem.inspect
+# name: Inspect paths
+# description: Inspect explicit paths.
+# domain: filesystem
+# interpreter: python3
+# mutating: false
+# idempotent: true
+# arguments:
+#   - name: path
+#     type: string_list
+#     pattern: '^/[^\\r\\n]+$'
+#     min_items: 1
+#     max_items: 3
+# ---
+""",
+        encoding="utf-8",
+    )
+    script = load_tool_registry([_source("local", tmp_path)]).get("filesystem.inspect")
+
+    command = build_script_command(script, {"path": ["/srv/one", "/srv/two"]})
+
+    assert shlex.split(command) == [
+        "python3",
+        "-",
+        "--path",
+        "/srv/one",
+        "--path",
+        "/srv/two",
+    ]
+    with pytest.raises(ValueError, match="list of strings"):
+        validate_script_arguments(script, {"path": "/srv/one"})
+    with pytest.raises(ValueError, match="exceeds max_items"):
+        validate_script_arguments(script, {"path": ["/1", "/2", "/3", "/4"]})
+
+
 def test_argument_contract_rejects_missing_unknown_and_invalid_values(tmp_path) -> None:
     _write_script(tmp_path / "echo.sh")
     script = load_tool_registry([_source("local", tmp_path)]).get("system.echo")

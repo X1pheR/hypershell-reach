@@ -40,13 +40,15 @@ class ArgumentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=63)
-    type: Literal["string", "integer", "boolean"]
+    type: Literal["string", "string_list", "integer", "boolean"]
     required: bool = True
     description: str | None = Field(default=None, max_length=300)
     enum: list[str] | None = None
     pattern: str | None = Field(default=None, max_length=256)
     min_length: int | None = Field(default=None, ge=0, le=32_768)
     max_length: int | None = Field(default=None, ge=1, le=32_768)
+    min_items: int | None = Field(default=None, ge=0, le=256)
+    max_items: int | None = Field(default=None, ge=1, le=256)
     minimum: int | None = None
     maximum: int | None = None
 
@@ -69,10 +71,14 @@ class ArgumentSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_type_options(self) -> "ArgumentSpec":
-        if self.type != "string" and any(
+        if self.type not in {"string", "string_list"} and any(
             value is not None for value in (self.enum, self.pattern, self.min_length, self.max_length)
         ):
-            raise ValueError("enum, pattern and length bounds require type=string")
+            raise ValueError("enum, pattern and length bounds require type=string or string_list")
+        if self.type != "string_list" and any(
+            value is not None for value in (self.min_items, self.max_items)
+        ):
+            raise ValueError("item-count bounds require type=string_list")
         if self.type != "integer" and any(
             value is not None for value in (self.minimum, self.maximum)
         ):
@@ -85,6 +91,9 @@ class ArgumentSpec(BaseModel):
         if self.min_length is not None and self.max_length is not None:
             if self.min_length > self.max_length:
                 raise ValueError("min_length must not exceed max_length")
+        if self.min_items is not None and self.max_items is not None:
+            if self.min_items > self.max_items:
+                raise ValueError("min_items must not exceed max_items")
         if self.minimum is not None and self.maximum is not None:
             if self.minimum > self.maximum:
                 raise ValueError("minimum must not exceed maximum")
@@ -326,26 +335,41 @@ def validate_script_arguments(script: ManagedScript, values: dict[str, Any]) -> 
     if missing:
         raise ValueError(f"missing arguments for {script.metadata.id}: {', '.join(missing)}")
 
+    def validate_string(spec: ArgumentSpec, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"argument {spec.name} must be a string")
+        if "\x00" in value:
+            raise ValueError(f"argument {spec.name} must not contain NUL bytes")
+        if spec.min_length is not None and len(value) < spec.min_length:
+            raise ValueError(f"argument {spec.name} is shorter than min_length")
+        max_length = spec.max_length if spec.max_length is not None else 4_096
+        if len(value) > max_length:
+            raise ValueError(f"argument {spec.name} exceeds max_length")
+        if spec.enum is not None and value not in spec.enum:
+            raise ValueError(f"argument {spec.name} is not an allowed value")
+        if spec.pattern is not None and re.fullmatch(spec.pattern, value) is None:
+            raise ValueError(f"argument {spec.name} does not match its pattern")
+        return value
+
     argv: list[str] = []
     for spec in script.metadata.arguments:
         if spec.name not in values:
             continue
         value = values[spec.name]
+        flag = f"--{spec.name.replace('_', '-')}"
         if spec.type == "string":
-            if not isinstance(value, str):
-                raise ValueError(f"argument {spec.name} must be a string")
-            if "\x00" in value:
-                raise ValueError(f"argument {spec.name} must not contain NUL bytes")
-            if spec.min_length is not None and len(value) < spec.min_length:
-                raise ValueError(f"argument {spec.name} is shorter than min_length")
-            max_length = spec.max_length if spec.max_length is not None else 4_096
-            if len(value) > max_length:
-                raise ValueError(f"argument {spec.name} exceeds max_length")
-            if spec.enum is not None and value not in spec.enum:
-                raise ValueError(f"argument {spec.name} is not an allowed value")
-            if spec.pattern is not None and re.fullmatch(spec.pattern, value) is None:
-                raise ValueError(f"argument {spec.name} does not match its pattern")
-            serialized = value
+            argv.extend([flag, validate_string(spec, value)])
+        elif spec.type == "string_list":
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ValueError(f"argument {spec.name} must be a list of strings")
+            min_items = spec.min_items if spec.min_items is not None else 1
+            max_items = spec.max_items if spec.max_items is not None else 64
+            if len(value) < min_items:
+                raise ValueError(f"argument {spec.name} has fewer than min_items")
+            if len(value) > max_items:
+                raise ValueError(f"argument {spec.name} exceeds max_items")
+            for item in value:
+                argv.extend([flag, validate_string(spec, item)])
         elif spec.type == "integer":
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"argument {spec.name} must be an integer")
@@ -353,13 +377,11 @@ def validate_script_arguments(script: ManagedScript, values: dict[str, Any]) -> 
                 raise ValueError(f"argument {spec.name} is below minimum")
             if spec.maximum is not None and value > spec.maximum:
                 raise ValueError(f"argument {spec.name} exceeds maximum")
-            serialized = str(value)
+            argv.extend([flag, str(value)])
         else:
             if not isinstance(value, bool):
                 raise ValueError(f"argument {spec.name} must be a boolean")
-            serialized = "true" if value else "false"
-
-        argv.extend([f"--{spec.name.replace('_', '-')}", serialized])
+            argv.extend([flag, "true" if value else "false"])
 
     return argv
 
