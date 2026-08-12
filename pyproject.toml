@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "homelab-agent-tooling-skills-mcp"
+version = "0.1.0"
+description = "Homelab Agent Tooling & Skills MCP (HATS)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+  "mcp>=1.1.0,<2.0",
+  "pydantic>=2.10.0,<3.0",
+  "pyyaml>=6.0.2,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+]
+
+[project.scripts]
+hats-mcp = "hats_mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hats_mcp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

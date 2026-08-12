@@ -1,3 +1,73 @@
 # HATS
 
-Homelab Agent Tooling & Skills MCP.
+Homelab Agent Tooling & Skills MCP provides reusable agent tooling, bounded remote execution and shared skill discovery for homelabs.
+
+> Pre-release project. Interfaces may change before the first stable release.
+
+## What it is
+
+HATS is a small MCP service for capabilities that are specific to a homelab and are not already provided by an upstream MCP server.
+
+```mermaid
+flowchart LR
+    Agent[Agent] --> Gateway[MCP gateway]
+    Gateway --> HATS[HATS]
+    HATS --> Targets[Configured targets]
+    HATS --> Tools[Managed tool sources]
+    HATS --> Skills[Skill sources]
+```
+
+The first implementation phase provides configured targets and bounded SSH execution. Managed tools, runs, tasks and skills are added as separate modules on the same service.
+
+## Design
+
+HATS is a modular monolith. Deployment-specific hosts, paths and source locations stay in configuration. The repository contains no Hypershell-specific configuration or private homelab data.
+
+See [Architecture](docs/architecture.md) for module boundaries and delivery phases.
+
+## Configuration
+
+HATS reads one YAML configuration file selected by `HATS_CONFIG`.
+
+```yaml
+schema_version: 1
+workspace:
+  tmp: /var/tmp/hats
+  tasks: /var/lib/hats/tasks
+  trash: /var/lib/hats/trash
+
+targets:
+  example:
+    display_name: Example host
+    transport: ssh
+    capabilities: [linux, bash]
+    ssh:
+      host: 192.0.2.10
+      user: operator
+      identity_file: /run/secrets/hats/id_ed25519
+      known_hosts_file: /run/secrets/hats/known_hosts
+```
+
+See [Configuration](docs/configuration.md) and [`examples/config.example.yaml`](examples/config.example.yaml).
+
+## MCP surface
+
+Phase 1 exposes:
+
+- `list_targets`
+- `run_command`
+- `run_shell`
+
+Later phases add managed tools, run/task continuity and Agent Skills without turning skill content into executable tooling.
+
+See [Tool contracts](docs/tools.md) and [Skills](docs/skills.md).
+
+## Security
+
+HATS does not authorize an agent to perform a change. It provides bounded execution and managed capability discovery. The caller remains responsible for deciding whether an operation is authorized.
+
+See [Security](docs/security.md).
+
+## Development
+
+See [Development](docs/development.md).

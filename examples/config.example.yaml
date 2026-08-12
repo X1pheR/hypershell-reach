@@ -1,0 +1,26 @@
+schema_version: 1
+
+workspace:
+  tmp: /var/tmp/hats
+  tasks: /var/lib/hats/tasks
+  trash: /var/lib/hats/trash
+
+defaults:
+  connect_timeout_seconds: 10
+  max_timeout_seconds: 300
+  max_output_bytes: 262144
+
+targets:
+  example:
+    display_name: Example host
+    transport: ssh
+    capabilities:
+      - linux
+      - bash
+    enabled: true
+    ssh:
+      host: 192.0.2.10
+      port: 22
+      user: operator
+      identity_file: /run/secrets/hats/id_ed25519
+      known_hosts_file: /run/secrets/hats/known_hosts
