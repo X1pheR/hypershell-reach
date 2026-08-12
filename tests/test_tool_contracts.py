@@ -8,6 +8,9 @@ from hats_mcp.server import list_tools
 def test_tools_have_truthful_annotations() -> None:
     tools = {tool.name: tool for tool in asyncio.run(list_tools())}
     expected = {
+        "skills_catalog": (True, False, True, False),
+        "skill_get": (True, False, True, False),
+        "skill_read_file": (True, False, True, False),
         "list_targets": (True, False, True, False),
         "list_scripts": (True, False, True, False),
         "get_script": (True, False, True, False),

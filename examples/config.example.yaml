@@ -23,6 +23,12 @@ sources:
       type: filesystem
       path: /sources/example-tools
       enabled: true
+  skills:
+    - id: local
+      type: filesystem
+      path: /sources/example-skills
+      enabled: true
+      os_platform: linux
 
 targets:
   example:

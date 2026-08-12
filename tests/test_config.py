@@ -103,3 +103,33 @@ def test_tool_source_ids_must_be_unique() -> None:
     }
     with pytest.raises(ValidationError, match="duplicate tool source IDs"):
         HATSConfig.model_validate(payload)
+
+
+def test_hermes_skill_source_requires_state_projection() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [{"id": "hermes", "type": "hermes", "path": "/skills"}]
+    }
+    with pytest.raises(ValidationError, match="require a state projection"):
+        HATSConfig.model_validate(payload)
+
+
+def test_hermes_skill_state_target_must_exist() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "hermes",
+                "type": "hermes",
+                "path": "/skills",
+                "state": {
+                    "target": "missing",
+                    "python_executable": "/usr/bin/python3",
+                    "config_path": "/home/user/.hermes/config.yaml",
+                    "repo_path": "/opt/hermes-agent",
+                },
+            }
+        ]
+    }
+    with pytest.raises(ValidationError, match="unknown Hermes skill-state targets"):
+        HATSConfig.model_validate(payload)

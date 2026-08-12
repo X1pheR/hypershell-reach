@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
+from .skills import HermesState, build_skill_registry, list_skill_files, read_skill_file
 from .runs import RunOperation, RunStatus, RunStore
 from .tasks import TaskStatus, TaskStore
 
@@ -24,6 +25,28 @@ _task_store_instance: TaskStore | None = None
 
 class EmptyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class SkillsCatalogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    include_inactive: bool = False
+
+
+class SkillGetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str = Field(min_length=3, max_length=190)
+    max_bytes: int = Field(default=32_768, ge=1, le=131_072)
+
+
+class SkillReadFileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str = Field(min_length=3, max_length=190)
+    relative_path: str = Field(min_length=1, max_length=4_096)
+    offset: int = Field(default=0, ge=0)
+    max_bytes: int = Field(default=65_536, ge=1, le=131_072)
 
 
 class CommandInput(BaseModel):
@@ -220,9 +243,112 @@ async def _tracked_ssh_run(
     return record.id, execution
 
 
+async def _hermes_state(source) -> HermesState:
+    assert source.state is not None
+    target = _config.enabled_target(source.state.target)
+    projector_path = __import__("pathlib").Path(__file__).with_name("hermes_state_projector.py")
+    projector = projector_path.read_text(encoding="utf-8")
+    import shlex
+
+    argv = [
+        source.state.python_executable,
+        "-",
+        "--config-path",
+        source.state.config_path,
+        "--repo-path",
+        source.state.repo_path,
+    ]
+    if source.state.consumer_platform:
+        argv.extend(["--consumer-platform", source.state.consumer_platform])
+    result = await run_ssh(
+        target_id=source.state.target,
+        target=target,
+        remote_command=" ".join(shlex.quote(value) for value in argv),
+        timeout_seconds=source.state.timeout_seconds,
+        connect_timeout_seconds=_config.resolved_connect_timeout(target),
+        max_output_bytes=min(_config.resolved_max_output(target), 131_072),
+        stdin_text=projector,
+    )
+    if result.get("status") != "succeeded":
+        raise RuntimeError(
+            f"Hermes skill-state projection failed for {source.id}: {result.get('status')}"
+        )
+    stdout = result.get("stdout") if isinstance(result.get("stdout"), dict) else {}
+    if stdout.get("truncated"):
+        raise RuntimeError(f"Hermes skill-state projection was truncated for {source.id}")
+    try:
+        payload = json.loads(str(stdout.get("text") or ""))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Hermes skill-state projection returned invalid JSON for {source.id}") from exc
+    if payload.get("schema_version") != 1:
+        raise RuntimeError(f"unsupported Hermes skill-state projection for {source.id}")
+    return HermesState(
+        effective_names=frozenset(str(value) for value in payload.get("effective_names", [])),
+        disabled=frozenset(str(value) for value in payload.get("disabled", [])),
+        external_dirs=tuple(str(value) for value in payload.get("external_dirs", [])),
+        consumer_platform=payload.get("consumer_platform"),
+        stderr_bytes=(
+            result.get("stderr", {}).get("bytes", 0)
+            if isinstance(result.get("stderr"), dict)
+            else 0
+        ),
+    )
+
+
+async def _skill_registry():
+    states: dict[str, HermesState] = {}
+    for source in _config.sources.skills:
+        if source.enabled and source.type == "hermes":
+            states[source.id] = await _hermes_state(source)
+    return build_skill_registry(_config.sources.skills, states)
+
+
 @app.list_tools()
 async def list_tools() -> list[types.Tool]:
     return [
+        types.Tool(
+            name="skills_catalog",
+            description=(
+                "Return compact metadata for configured Agent Skills. Hermes sources use a "
+                "live read-only state projection so the default catalog follows Hermes' "
+                "effective skill set."
+            ),
+            inputSchema=SkillsCatalogInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="skill_get",
+            description=(
+                "Return metadata, file manifest and a bounded first chunk of SKILL.md for one "
+                "active source-qualified skill ID."
+            ),
+            inputSchema=SkillGetInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="skill_read_file",
+            description=(
+                "Read a bounded byte range from one supporting file inside an active skill "
+                "package. Binary files return metadata without base64 content."
+            ),
+            inputSchema=SkillReadFileInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
         types.Tool(
             name="list_targets",
             description=(
@@ -425,7 +551,42 @@ async def call_tool(
         arguments = {}
 
     try:
-        if name == "list_targets":
+        if name == "skills_catalog":
+            args = SkillsCatalogInput(**arguments)
+            registry = await _skill_registry()
+            result = {
+                "skills": [
+                    skill.summary()
+                    for skill in registry.list(include_inactive=args.include_inactive)
+                ],
+                "sources": registry.source_reports,
+            }
+        elif name == "skill_get":
+            args = SkillGetInput(**arguments)
+            registry = await _skill_registry()
+            skill = registry.get(args.skill_id)
+            content = read_skill_file(skill, "SKILL.md", offset=0, max_bytes=args.max_bytes)
+            result = {
+                **skill.summary(),
+                "frontmatter": skill.frontmatter,
+                "provenance_details": skill.provenance_details,
+                "relative_dir": skill.relative_dir,
+                "sha256": skill.sha256,
+                "bytes": skill.bytes,
+                "files": list_skill_files(skill),
+                "skill_md": content,
+            }
+        elif name == "skill_read_file":
+            args = SkillReadFileInput(**arguments)
+            registry = await _skill_registry()
+            skill = registry.get(args.skill_id)
+            result = read_skill_file(
+                skill,
+                args.relative_path,
+                offset=args.offset,
+                max_bytes=args.max_bytes,
+            )
+        elif name == "list_targets":
             EmptyInput(**arguments)
             result = {
                 "targets": [

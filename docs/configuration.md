@@ -91,4 +91,26 @@ Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns ID
 
 ## Skill sources
 
-Skill source configuration is added in the skills phase. It uses the same deployment-owned source principle but has different duplicate and compatibility semantics from executable tools.
+```yaml
+sources:
+  skills:
+    - id: local
+      type: filesystem
+      path: /sources/local-skills
+      os_platform: linux
+
+    - id: hermes
+      type: hermes
+      path: /sources/hermes-skills
+      os_platform: linux
+      state:
+        target: hermes
+        python_executable: /usr/bin/python3
+        config_path: /home/operator/.hermes/config.yaml
+        repo_path: /opt/hermes-agent
+        consumer_platform: cli
+```
+
+Skill IDs are source-qualified, so the same bare skill name can exist in different sources without shadowing. Within one source a duplicate bare skill name is rejected.
+
+A Hermes source requires a bounded state projection target. The content path is read locally; the projection executes only the HATS-owned read-only projector over the configured target and returns a sanitized effective catalog. See [Skills](skills.md).

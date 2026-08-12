@@ -83,13 +83,76 @@ class Sources(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tools: list[ToolSource] = Field(default_factory=list)
+    skills: list[SkillSource] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def require_unique_tool_source_ids(self) -> "Sources":
-        ids = [source.id for source in self.tools]
-        duplicates = sorted({source_id for source_id in ids if ids.count(source_id) > 1})
-        if duplicates:
-            raise ValueError(f"duplicate tool source IDs: {', '.join(duplicates)}")
+    def require_unique_source_ids(self) -> "Sources":
+        for label, sources in (("tool", self.tools), ("skill", self.skills)):
+            ids = [source.id for source in sources]
+            duplicates = sorted({source_id for source_id in ids if ids.count(source_id) > 1})
+            if duplicates:
+                raise ValueError(f"duplicate {label} source IDs: {', '.join(duplicates)}")
+        return self
+
+
+class HermesSkillState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(min_length=1, max_length=63)
+    python_executable: str = Field(min_length=1)
+    config_path: str = Field(min_length=1)
+    repo_path: str = Field(min_length=1)
+    consumer_platform: str | None = Field(default=None, min_length=1, max_length=64)
+    timeout_seconds: int = Field(default=15, ge=1, le=60)
+
+    @field_validator("python_executable", "config_path", "repo_path")
+    @classmethod
+    def require_absolute_paths(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("Hermes skill-state paths must be absolute")
+        return value
+
+
+class SkillSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=63)
+    type: Literal["filesystem", "hermes"] = "filesystem"
+    path: str = Field(min_length=1)
+    enabled: bool = True
+    os_platform: Literal["linux", "macos", "windows"] | None = None
+    active_environments: list[str] = Field(default_factory=list)
+    state: HermesSkillState | None = None
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if not _SOURCE_ID.fullmatch(value):
+            raise ValueError("invalid skill source ID")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def require_absolute_path(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("skill source paths must be absolute")
+        return value
+
+    @field_validator("active_environments")
+    @classmethod
+    def normalize_environments(cls, values: list[str]) -> list[str]:
+        normalized = sorted({str(value).strip().lower() for value in values if str(value).strip()})
+        invalid = [value for value in normalized if not _CAPABILITY.fullmatch(value)]
+        if invalid:
+            raise ValueError(f"invalid active environments: {', '.join(invalid)}")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_provider(self) -> "SkillSource":
+        if self.type == "hermes" and self.state is None:
+            raise ValueError("Hermes skill sources require a state projection")
+        if self.type == "filesystem" and self.state is not None:
+            raise ValueError("filesystem skill sources must not configure Hermes state")
         return self
 
 
@@ -162,6 +225,19 @@ class HATSConfig(BaseModel):
         invalid = sorted(target_id for target_id in self.targets if not _TARGET_ID.fullmatch(target_id))
         if invalid:
             raise ValueError(f"invalid target IDs: {', '.join(invalid)}")
+        unknown_state_targets = sorted(
+            {
+                source.state.target
+                for source in self.sources.skills
+                if source.type == "hermes"
+                and source.state is not None
+                and source.state.target not in self.targets
+            }
+        )
+        if unknown_state_targets:
+            raise ValueError(
+                f"unknown Hermes skill-state targets: {', '.join(unknown_state_targets)}"
+            )
         return self
 
     def enabled_target(self, target_id: str) -> Target:

@@ -14,7 +14,7 @@ flowchart LR
     Tools --> SSH
     Server --> Runs[Run state]
     Server --> Tasks[Task state]
-    Server -. phase 5 .-> Skills[Skill sources]
+    Server --> Skills[Skill sources]
 ```
 
 One process owns configuration, target lookup, tool discovery and local state. HATS does not require a separate controller, database server or worker service.
