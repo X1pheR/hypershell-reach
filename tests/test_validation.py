@@ -143,7 +143,7 @@ def test_validate_reports_bundled_tool_source(tmp_path: Path) -> None:
     assert "- hats" in report.text
     assert "Type: bundled" in report.text
     assert "bundled_tools" in report.text
-    assert "Scripts: 1" in report.text
+    assert "Scripts: 2" in report.text
 
 
 def test_validate_hermes_source_does_not_require_network_state(tmp_path: Path) -> None:

@@ -106,6 +106,14 @@ The default gates match the migrated Agent Tooling contract: 50% aggregate CPU, 
 
 Exit `0` means the measurement window is ready, `1` means the window is busy and `2` means a required local metric boundary failed.
 
+### `git.summary-bounded`
+
+Produces a bounded read-only Git work-tree summary. It uses a temporary `HOME`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_OPTIONAL_LOCKS=0` and a command-scoped `safe.directory` override, preserving the isolation contract migrated from Agent Tooling without its shared shell-library dependency.
+
+The caller supplies an absolute repository path and may bound status and `diff --check` diagnostics or require a clean work tree. The result includes branch/HEAD/upstream state, ahead/behind counts, staged/unstaged/untracked/conflict counts, bounded status and diagnostics, and compact-stat line counts. The tool writes no result file; MCP output and HATS Run state own transport and execution metadata.
+
+Exit `0` means the requested Git policy passed, `1` means the repository is dirty when cleanliness was required or `diff --check` failed, and `2` means preflight or local Git execution failed.
+
 ## Raw execution
 
 ### `run_command`
