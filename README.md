@@ -33,6 +33,7 @@ HATS reads one YAML configuration file selected by `HATS_CONFIG`.
 schema_version: 1
 workspace:
   tmp: /var/tmp/hats
+  runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
 
@@ -55,6 +56,14 @@ targets:
 ```
 
 See [Configuration](docs/configuration.md) and [`examples/config.example.yaml`](examples/config.example.yaml).
+
+Before connecting HATS to an MCP client, validate the local deployment:
+
+```bash
+HATS_CONFIG=/path/to/hats.yaml hats-mcp validate
+```
+
+`validate` is an operator-facing preflight. It shows configured target names and hosts, workspace readiness, source paths and SSH credential paths without printing credential contents or making network connections.
 
 ## MCP surface
 

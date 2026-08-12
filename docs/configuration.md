@@ -114,3 +114,36 @@ sources:
 Skill IDs are source-qualified, so the same bare skill name can exist in different sources without shadowing. Within one source a duplicate bare skill name is rejected.
 
 A Hermes source requires a bounded state projection target. The content path is read locally; the projection executes only the HATS-owned read-only projector over the configured target and returns a sanitized effective catalog. See [Skills](skills.md).
+
+## Local validation
+
+Run the operator preflight before registering HATS with an MCP client:
+
+```bash
+HATS_CONFIG=/path/to/hats.yaml hats-mcp validate
+```
+
+Or select the file explicitly:
+
+```bash
+hats-mcp validate --config /path/to/hats.yaml
+```
+
+The command validates the typed configuration and local runtime prerequisites. It reports:
+
+- workspace paths and whether they are writable or creatable from a writable parent;
+- enabled target IDs, display names, SSH hosts, users and capabilities;
+- enabled managed-tool source paths and discovered script counts;
+- enabled skill source paths and discovered local package counts;
+- Hermes state-target names and hosts, without contacting Hermes;
+- the fixed SSH executable and configured identity/known-host paths as present/readable checks.
+
+`validate` does not make network connections and never prints credential contents. Workspace writability checks use short-lived local probe files that are removed immediately. For Hermes sources the local content tree is validated, but effective enable/disable state is reported as not checked because that requires the normal runtime state projection.
+
+Exit codes are stable:
+
+- `0` — configuration and local prerequisites are valid;
+- `1` — configuration or a local runtime prerequisite is invalid;
+- `2` — CLI usage error.
+
+The normal MCP surface remains intentionally less revealing: `list_targets` does not expose hosts, users or credential paths.

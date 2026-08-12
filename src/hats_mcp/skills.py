@@ -294,7 +294,12 @@ def _description(frontmatter: dict[str, Any], body: str) -> str:
     return ""
 
 
-def _scan_source(source: SkillSource, state: HermesState | None) -> tuple[list[SkillPackage], dict[str, object]]:
+def _scan_source(
+    source: SkillSource,
+    state: HermesState | None,
+    *,
+    allow_unresolved_hermes: bool = False,
+) -> tuple[list[SkillPackage], dict[str, object]]:
     root = Path(source.path)
     if not root.exists():
         raise ValueError(f"skill source does not exist: {source.id}")
@@ -334,9 +339,13 @@ def _scan_source(source: SkillSource, state: HermesState | None) -> tuple[list[S
         environment_relevant = _environment_matches(frontmatter, source.active_environments)
         if source.type == "hermes":
             if state is None:
-                raise RuntimeError(f"Hermes state is unavailable for source: {source.id}")
-            enabled = name not in state.disabled
-            effective = name in state.effective_names
+                if not allow_unresolved_hermes:
+                    raise RuntimeError(f"Hermes state is unavailable for source: {source.id}")
+                enabled = True
+                effective = False
+            else:
+                enabled = name not in state.disabled
+                effective = name in state.effective_names
         else:
             enabled = True
             effective = compatible and environment_relevant
@@ -376,8 +385,13 @@ def _scan_source(source: SkillSource, state: HermesState | None) -> tuple[list[S
         "id": source.id,
         "type": source.type,
         "physical_count": len(packages),
-        "effective_count": sum(1 for package in packages if package.effective),
-        "exact_content_parity": True,
+        "effective_count": (
+            None
+            if source.type == "hermes" and state is None
+            else sum(1 for package in packages if package.effective)
+        ),
+        "state_checked": source.type != "hermes" or state is not None,
+        "exact_content_parity": source.type != "hermes" or state is not None,
     }
     if source.type == "hermes" and state is not None:
         missing_content = sorted(state.effective_names - physical_names)
@@ -397,6 +411,16 @@ def _scan_source(source: SkillSource, state: HermesState | None) -> tuple[list[S
             }
         )
     return packages, report
+
+
+def inspect_skill_source(source: SkillSource) -> tuple[list[SkillPackage], dict[str, object]]:
+    """Validate one local skill content source without making network calls.
+
+    Hermes sources are scanned for readable local packages only. Their effective
+    enable/disable state remains unresolved until the normal runtime projection runs.
+    """
+
+    return _scan_source(source, None, allow_unresolved_hermes=True)
 
 
 def build_skill_registry(
