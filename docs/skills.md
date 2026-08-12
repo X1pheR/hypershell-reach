@@ -19,7 +19,7 @@ The catalog returns compact metadata. Full `SKILL.md` content and supporting fil
 HATS supports multiple configured skill sources with stable source-qualified IDs.
 
 ```text
-hermes:hypershell-vault-governance
+hermes:host-operations
 local:my-skill
 ```
 
@@ -29,7 +29,7 @@ Unknown frontmatter fields are preserved. HATS validates the core skill contract
 
 The Hermes adapter must mirror Hermes' effective skill catalog, not only the files present on disk.
 
-For Hermes Agent 0.20.0 this means accounting for:
+The initial Hermes Agent 0.20.0 compatibility baseline accounts for:
 
 - the active `~/.hermes/skills` tree;
 - platform compatibility;
