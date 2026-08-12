@@ -19,6 +19,9 @@ defaults:
 
 sources:
   tools:
+    - id: hats
+      type: bundled
+      enabled: true
     - id: examples
       type: filesystem
       path: /sources/example-tools

@@ -54,19 +54,20 @@ Targets may override these limits within the schema bounds.
 ```yaml
 sources:
   tools:
-    - id: bundled
-      type: filesystem
-      path: /app/tools
+    - id: hats
+      type: bundled
+      enabled: true
     - id: local
       type: filesystem
       path: /sources/local-tools
+      enabled: true
 ```
 
-Source IDs must be unique. Paths are absolute and deployment-owned. Disabled sources remain configured but are not scanned.
+`bundled` selects managed tools shipped inside the installed HATS package and therefore has no configured path. `filesystem` reads an explicit absolute deployment-owned directory. Disabled sources remain configured but are not scanned.
 
-HATS reads the configured directories directly. Git checkout, bind mounts, SMB, rsync or other source-delivery mechanisms remain deployment responsibilities.
+Filesystem source delivery through Git checkout, bind mounts, SMB, rsync or another mechanism remains a deployment responsibility. Bundled tools are versioned with the HATS package, so package installation does not require a second checkout for the standard tool set.
 
-Managed script IDs must be globally unique across enabled sources. A duplicate is a configuration/runtime error rather than a precedence rule.
+Source IDs must be unique. Managed script IDs must be globally unique across enabled sources. A duplicate is a configuration/runtime error rather than a precedence rule.
 
 ## Targets
 

@@ -93,6 +93,27 @@ def test_tool_source_path_must_be_absolute() -> None:
         HATSConfig.model_validate(payload)
 
 
+def test_bundled_tool_source_requires_no_path() -> None:
+    payload = _config()
+    payload["sources"] = {"tools": [{"id": "hats", "type": "bundled"}]}
+    config = HATSConfig.model_validate(payload)
+    assert config.sources.tools[0].path is None
+
+
+def test_bundled_tool_source_rejects_path() -> None:
+    payload = _config()
+    payload["sources"] = {"tools": [{"id": "hats", "type": "bundled", "path": "/tools"}]}
+    with pytest.raises(ValidationError, match="must not configure path"):
+        HATSConfig.model_validate(payload)
+
+
+def test_filesystem_tool_source_requires_path() -> None:
+    payload = _config()
+    payload["sources"] = {"tools": [{"id": "local", "type": "filesystem"}]}
+    with pytest.raises(ValidationError, match="require path"):
+        HATSConfig.model_validate(payload)
+
+
 def test_tool_source_ids_must_be_unique() -> None:
     payload = _config()
     payload["sources"] = {

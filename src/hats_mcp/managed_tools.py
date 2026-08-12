@@ -33,6 +33,7 @@ _SKIP_DIRS = {
     "venv",
 }
 _INTERPRETER_CAPABILITY = {"sh": "sh", "bash": "bash", "python3": "python3"}
+_BUNDLED_TOOLS_ROOT = Path(__file__).resolve().parent / "bundled_tools"
 
 
 class ArgumentSpec(BaseModel):
@@ -259,6 +260,13 @@ def _load_script(path: Path, source_id: str, root: Path) -> ManagedScript | None
     )
 
 
+def resolve_tool_source_root(source: ToolSource) -> Path:
+    if source.type == "bundled":
+        return _BUNDLED_TOOLS_ROOT
+    assert source.path is not None
+    return Path(source.path)
+
+
 def load_tool_registry(sources: list[ToolSource]) -> ToolRegistry:
     scripts: dict[str, ManagedScript] = {}
     owners: dict[str, list[str]] = {}
@@ -266,7 +274,7 @@ def load_tool_registry(sources: list[ToolSource]) -> ToolRegistry:
     for source in sources:
         if not source.enabled:
             continue
-        root = Path(source.path)
+        root = resolve_tool_source_root(source)
         if not root.exists():
             raise ValueError(f"tool source does not exist: {source.id}")
         if not root.is_dir():

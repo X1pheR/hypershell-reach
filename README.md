@@ -39,9 +39,13 @@ workspace:
 
 sources:
   tools:
+    - id: hats
+      type: bundled
+      enabled: true
     - id: local
       type: filesystem
       path: /sources/local-tools
+      enabled: true
 
 targets:
   example:
@@ -54,6 +58,8 @@ targets:
       identity_file: /run/secrets/hats/id_ed25519
       known_hosts_file: /run/secrets/hats/known_hosts
 ```
+
+The `bundled` source enables standard managed tools shipped with the installed HATS package. Additional deployment-owned tools can be added through filesystem sources.
 
 See [Configuration](docs/configuration.md) and [`examples/config.example.yaml`](examples/config.example.yaml).
 

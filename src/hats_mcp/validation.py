@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import HATSConfig, load_config
-from .managed_tools import load_tool_registry
+from .managed_tools import load_tool_registry, resolve_tool_source_root
 from .skills import inspect_skill_source
 
 _SSH_EXECUTABLE = Path("/usr/bin/ssh")
@@ -135,7 +135,7 @@ def _tool_source_lines(config: HATSConfig) -> tuple[list[str], int]:
                 "",
                 f"  - {source.id}",
                 f"    Type: {source.type}",
-                f"    Path: {source.path}",
+                f"    Path: {resolve_tool_source_root(source)}",
             ]
         )
         if error is None:

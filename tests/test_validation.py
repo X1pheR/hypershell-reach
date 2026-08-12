@@ -131,6 +131,21 @@ def test_validate_reports_operator_visible_configuration(tmp_path: Path) -> None
     assert "Skills discovered: 1" in report.text
 
 
+def test_validate_reports_bundled_tool_source(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["tools"] = [{"id": "hats", "type": "bundled"}]
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert "- hats" in report.text
+    assert "Type: bundled" in report.text
+    assert "bundled_tools" in report.text
+    assert "Scripts: 1" in report.text
+
+
 def test_validate_hermes_source_does_not_require_network_state(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path, hermes=True)
 

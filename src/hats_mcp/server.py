@@ -360,8 +360,8 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_scripts",
             description=(
-                "List registered managed scripts and compact execution metadata. "
-                "Only configured filesystem sources are scanned."
+                "List registered managed scripts and compact execution metadata from configured "
+                "bundled and filesystem sources."
             ),
             inputSchema=EmptyInput.model_json_schema(),
             annotations=types.ToolAnnotations(

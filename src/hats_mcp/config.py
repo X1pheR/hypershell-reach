@@ -60,8 +60,8 @@ class ToolSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=63)
-    type: Literal["filesystem"] = "filesystem"
-    path: str = Field(min_length=1)
+    type: Literal["filesystem", "bundled"] = "filesystem"
+    path: str | None = Field(default=None, min_length=1)
     enabled: bool = True
 
     @field_validator("id")
@@ -71,12 +71,16 @@ class ToolSource(BaseModel):
             raise ValueError("invalid tool source ID")
         return value
 
-    @field_validator("path")
-    @classmethod
-    def require_absolute_path(cls, value: str) -> str:
-        if not Path(value).is_absolute():
-            raise ValueError("tool source paths must be absolute")
-        return value
+    @model_validator(mode="after")
+    def validate_provider(self) -> "ToolSource":
+        if self.type == "filesystem":
+            if self.path is None:
+                raise ValueError("filesystem tool sources require path")
+            if not Path(self.path).is_absolute():
+                raise ValueError("tool source paths must be absolute")
+        elif self.path is not None:
+            raise ValueError("bundled tool sources must not configure path")
+        return self
 
 
 class Sources(BaseModel):

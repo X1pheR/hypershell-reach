@@ -1,6 +1,6 @@
 # Tool contracts
 
-HATS exposes raw bounded execution and registry-backed managed tools. Managed tools are the preferred surface for repeatable homelab operations.
+HATS exposes raw bounded execution and registry-backed managed tools. Managed tools are the preferred surface for repeatable homelab operations. Sources can be package-bundled or deployment-owned filesystem directories.
 
 ## Managed tool flow
 
@@ -93,6 +93,18 @@ Strings without an explicit `max_length` are limited to 4096 characters.
 Discovery is recursive but does not traverse common VCS, dependency or cache directories. Managed script files and discovered subdirectories must not be symlinks. Scripts larger than 256 KiB and frontmatter larger than 16 KiB are rejected.
 
 Files without HATS frontmatter are ignored.
+
+## Bundled tools
+
+Bundled tools are versioned with the HATS package and enabled only when configuration includes a `type: bundled` tool source.
+
+### `performance.host-preflight`
+
+Performs a read-only Linux host-load admission check before representative performance measurements. It samples aggregate CPU and normalized one-minute load and can include bounded `docker stats` CPU diagnostics when Docker is available or required.
+
+The default gates match the migrated Agent Tooling contract: 50% aggregate CPU, 75% one-minute load per logical CPU and 25% for any reported container. `interval_ms` replaces the legacy free-form fractional-seconds argument so the HATS v1 contract remains integer-typed and bounded. The tool writes no result file; HATS Run state owns execution metadata.
+
+Exit `0` means the measurement window is ready, `1` means the window is busy and `2` means a required local metric boundary failed.
 
 ## Raw execution
 
