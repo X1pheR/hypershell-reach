@@ -33,6 +33,21 @@ def test_filesystem_catalog_uses_qualified_ids_and_support_exclusion(tmp_path) -
     assert registry.get("local:example").category == "research"
 
 
+def test_catalog_description_matches_hermes_cap(tmp_path) -> None:
+    directory = tmp_path / "long"
+    directory.mkdir()
+    raw_description = "x" * 1100
+    (directory / "SKILL.md").write_text(
+        f"---\nname: long\ndescription: {raw_description}\n---\n# Long\n",
+        encoding="utf-8",
+    )
+
+    skill = build_skill_registry([SkillSource(id="local", path=str(tmp_path))]).get("local:long")
+
+    assert len(skill.description) == 1024
+    assert skill.description.endswith("...")
+    assert set(skill.catalog_summary()) == {"id", "name", "description", "category"}
+
 def test_platform_and_environment_filtering_for_filesystem_source(tmp_path) -> None:
     _skill(tmp_path, "mac", name="mac", extra="platforms: [macos]\n")
     _skill(tmp_path, "kanban", name="kanban", extra="environments: [kanban]\n")

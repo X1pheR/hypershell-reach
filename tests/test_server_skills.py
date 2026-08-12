@@ -90,7 +90,19 @@ async def test_catalog_and_get_use_live_hermes_state(tmp_path, monkeypatch) -> N
     detail_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
     detail = json.loads(detail_content[0].text)
 
-    assert catalog["skills"][0]["id"] == "hermes:example"
+    assert catalog == {
+        "skills": [
+            {
+                "id": "hermes:example",
+                "name": "example",
+                "description": "Example skill.",
+                "category": None,
+            }
+        ],
+        "categories": [],
+        "count": 1,
+        "hint": "Use skill_get(skill_id) to load full content and supporting-file metadata.",
+    }
     assert detail["skill_md"]["content"].startswith("---")
     assert calls == 2
 

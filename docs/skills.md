@@ -10,7 +10,9 @@ skill_get(skill_id)
 skill_read_file(skill_id, relative_path, offset, max_bytes)
 ```
 
-`skills_catalog` returns compact metadata. `skill_get` loads one bounded first chunk of `SKILL.md`. `skill_read_file` reads supporting files in bounded byte ranges.
+`skills_catalog` is the tier-1 discovery surface. It returns only effective skills using the same progressive-disclosure shape as Hermes: source-qualified ID, name, description and category, plus the category list and total count. Descriptions are capped at 1024 characters with an ellipsis when truncated. `skill_get` loads one bounded first chunk of `SKILL.md`. `skill_read_file` reads supporting files in bounded byte ranges.
+
+The catalog is live state, not a synchronized copy. It has no catalog version: each call rebuilds the configured source view and Hermes sources query current effective Hermes state.
 
 Source-qualified IDs avoid cross-source ambiguity:
 
@@ -81,6 +83,8 @@ Core frontmatter fields are validated lightly. Unknown frontmatter fields and na
 A script inside a skill package remains read-only skill content. It is never registered as a managed HATS tool automatically.
 
 ## Content retrieval
+
+A consumer should load `skills_catalog` once at the start of a new agent conversation so the model is aware of available skills, then call `skill_get` only for skills relevant to the current work.
 
 `skill_get` returns:
 

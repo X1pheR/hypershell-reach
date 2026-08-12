@@ -27,12 +27,6 @@ class EmptyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class SkillsCatalogInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    include_inactive: bool = False
-
-
 class SkillGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -313,7 +307,7 @@ async def list_tools() -> list[types.Tool]:
                 "live read-only state projection so the default catalog follows Hermes' "
                 "effective skill set."
             ),
-            inputSchema=SkillsCatalogInput.model_json_schema(),
+            inputSchema=EmptyInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=True,
                 destructiveHint=False,
@@ -552,14 +546,14 @@ async def call_tool(
 
     try:
         if name == "skills_catalog":
-            args = SkillsCatalogInput(**arguments)
+            EmptyInput(**arguments)
             registry = await _skill_registry()
+            skills = registry.list()
             result = {
-                "skills": [
-                    skill.summary()
-                    for skill in registry.list(include_inactive=args.include_inactive)
-                ],
-                "sources": registry.source_reports,
+                "skills": [skill.catalog_summary() for skill in skills],
+                "categories": sorted({skill.category for skill in skills if skill.category}),
+                "count": len(skills),
+                "hint": "Use skill_get(skill_id) to load full content and supporting-file metadata.",
             }
         elif name == "skill_get":
             args = SkillGetInput(**arguments)

@@ -36,6 +36,7 @@ PLATFORM_MAP = {"macos": "darwin", "linux": "linux", "windows": "win32"}
 MAX_SKILL_FILE_BYTES = 1_048_576
 MAX_SUPPORT_FILE_BYTES = 16_777_216
 MAX_READ_BYTES = 131_072
+MAX_DESCRIPTION_LENGTH = 1024
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -72,14 +73,19 @@ class SkillPackage:
     def id(self) -> str:
         return f"{self.source_id}:{self.name}"
 
-    def summary(self) -> dict[str, object]:
+    def catalog_summary(self) -> dict[str, object]:
         return {
             "id": self.id,
             "name": self.name,
             "description": self.description,
+            "category": self.category,
+        }
+
+    def summary(self) -> dict[str, object]:
+        return {
+            **self.catalog_summary(),
             "source": self.source_id,
             "source_type": self.source_type,
-            "category": self.category,
             "provenance": self.provenance,
             "effective": self.effective,
             "enabled": self.enabled,
@@ -271,14 +277,20 @@ def _provenance(
     return "local", {}
 
 
+def _cap_description(value: str) -> str:
+    if len(value) <= MAX_DESCRIPTION_LENGTH:
+        return value
+    return value[: MAX_DESCRIPTION_LENGTH - 3] + "..."
+
+
 def _description(frontmatter: dict[str, Any], body: str) -> str:
     raw = frontmatter.get("description")
     if raw is not None and str(raw).strip():
-        return str(raw).strip()[:1024]
+        return _cap_description(str(raw).strip())
     for line in body.splitlines():
         value = line.strip()
         if value and not value.startswith("#"):
-            return value[:1024]
+            return _cap_description(value)
     return ""
 
 
