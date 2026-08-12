@@ -21,7 +21,7 @@ The first implementation phase provides configured targets and bounded SSH execu
 
 ## Design
 
-HATS is a modular monolith. Deployment-specific hosts, paths and source locations stay in configuration. The repository contains no Hypershell-specific configuration or private homelab data.
+HATS is a modular monolith. Deployment-specific hosts, paths and source locations stay in configuration. The repository contains no deployment-specific configuration or private homelab data.
 
 See [Architecture](docs/architecture.md) for module boundaries and delivery phases.
 
