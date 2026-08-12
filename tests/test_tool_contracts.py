@@ -5,10 +5,13 @@ import asyncio
 from hats_mcp.server import list_tools
 
 
-def test_phase_one_tools_have_truthful_annotations() -> None:
+def test_tools_have_truthful_annotations() -> None:
     tools = {tool.name: tool for tool in asyncio.run(list_tools())}
     expected = {
         "list_targets": (True, False, True, False),
+        "list_scripts": (True, False, True, False),
+        "get_script": (True, False, True, False),
+        "run_script": (False, True, False, True),
         "run_command": (False, True, False, True),
         "run_shell": (False, True, False, True),
     }

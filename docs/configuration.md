@@ -8,6 +8,7 @@ HATS reads YAML from the path in `HATS_CONFIG`. Configuration is deployment-owne
 schema_version: 1
 workspace: {}
 defaults: {}
+sources: {}
 targets: {}
 ```
 
@@ -22,7 +23,7 @@ workspace:
   trash: /var/lib/hats/trash
 ```
 
-All workspace paths are explicit absolute paths. Phase 1 validates them but does not create task state.
+All workspace paths are explicit absolute paths. They are reserved for later run/task state and do not contain managed tool sources.
 
 ## Execution defaults
 
@@ -35,12 +36,31 @@ defaults:
 
 Targets may override these limits within the schema bounds.
 
+## Managed tool sources
+
+```yaml
+sources:
+  tools:
+    - id: bundled
+      type: filesystem
+      path: /app/tools
+    - id: local
+      type: filesystem
+      path: /sources/local-tools
+```
+
+Source IDs must be unique. Paths are absolute and deployment-owned. Disabled sources remain configured but are not scanned.
+
+HATS reads the configured directories directly. Git checkout, bind mounts, SMB, rsync or other source-delivery mechanisms remain deployment responsibilities.
+
+Managed script IDs must be globally unique across enabled sources. A duplicate is a configuration/runtime error rather than a precedence rule.
+
 ## Targets
 
 ```yaml
 targets:
-  docker:
-    display_name: Docker host
+  example:
+    display_name: Example host
     transport: ssh
     capabilities: [linux, bash, docker]
     enabled: true
@@ -54,8 +74,8 @@ targets:
 
 Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns IDs, display names, capabilities and effective limits. It never returns host addresses, usernames or credential paths.
 
-`capabilities` are descriptive compatibility tags. They are not an authorization system.
+`capabilities` are compatibility tags. They are not an authorization system.
 
-## Source configuration
+## Skill sources
 
-Managed tool and skill source configuration is reserved for later phases. The design supports multiple ordered sources without requiring HATS to manage Git or filesystem synchronization itself.
+Skill source configuration is added in the skills phase. It uses the same deployment-owned source principle but has different duplicate and compatibility semantics from executable tools.

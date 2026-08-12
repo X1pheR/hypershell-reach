@@ -9,25 +9,44 @@ flowchart LR
     Client[MCP client] --> Server[HATS MCP server]
     Config[YAML configuration] --> Server
     Server --> Targets[Target registry]
+    Server --> Tools[Managed tool registry]
     Targets --> SSH[SSH execution]
-    Server -. phase 2 .-> Tools[Managed tools]
+    Tools --> SSH
     Server -. phase 3 .-> State[Runs and tasks]
     Server -. phase 5 .-> Skills[Skill sources]
 ```
 
-One process owns configuration, target lookup, tool registration and local state. HATS does not require a separate controller, database server or worker service.
+One process owns configuration, target lookup, tool discovery and local state. HATS does not require a separate controller, database server or worker service.
 
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
-| Configuration | Validate deployment-specific targets, workspace paths and enabled modules. |
+| Configuration | Validate deployment-specific targets, source roots and workspace paths. |
 | Targets | Return safe target metadata and resolve one configured execution target. |
-| SSH execution | Run bounded non-interactive commands or shell input on configured targets. |
-| Managed tools | Discover approved tool metadata and execute only registered tools. |
+| SSH execution | Run bounded non-interactive commands or interpreter input on configured targets. |
+| Managed tools | Discover approved metadata and execute only registered script IDs. |
 | Runs | Record technical execution state and ambiguous/interrupted outcomes. |
 | Tasks | Keep durable continuity only for work that needs recovery or handoff. |
 | Skills | Discover and retrieve read-only Agent Skills from configured sources. |
+
+## Managed tool execution
+
+```mermaid
+sequenceDiagram
+    participant C as MCP client
+    participant H as HATS
+    participant S as Tool source
+    participant T as Target
+    C->>H: run_script(script_id, target, arguments)
+    H->>S: Resolve exact registered ID
+    H->>H: Validate metadata, arguments, capabilities
+    H->>T: Send script over bounded SSH stdin
+    T-->>H: Exit status and bounded output
+    H-->>C: Structured result
+```
+
+Tool source delivery is external to HATS. A target does not need the source repository or script installed locally.
 
 ## Delivery phases
 
@@ -54,11 +73,11 @@ flowchart LR
     LocalSkills[Other skill source] --> Service
 ```
 
-HATS consumes configured filesystem sources. It does not need to own their Git, rsync or mount lifecycle.
+HATS consumes configured filesystem sources. It does not own their Git, rsync or mount lifecycle.
 
 ## Execution boundary
 
-The caller selects a configured target. The target configuration owns host, port, user, identity, known-hosts file and execution limits.
+The caller selects a configured target. Target configuration owns host, port, user, identity, known-hosts file and execution limits.
 
 SSH execution is non-interactive and uses strict host-key checking, key-only authentication, no PTY, no forwarding, bounded output, bounded timeout and no automatic retry.
 

@@ -9,6 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 _TARGET_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_SOURCE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 _CAPABILITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
@@ -33,6 +34,43 @@ class Workspace(BaseModel):
         if not Path(value).is_absolute():
             raise ValueError("workspace paths must be absolute")
         return value
+
+
+class ToolSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=63)
+    type: Literal["filesystem"] = "filesystem"
+    path: str = Field(min_length=1)
+    enabled: bool = True
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if not _SOURCE_ID.fullmatch(value):
+            raise ValueError("invalid tool source ID")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def require_absolute_path(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("tool source paths must be absolute")
+        return value
+
+
+class Sources(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[ToolSource] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_unique_tool_source_ids(self) -> "Sources":
+        ids = [source.id for source in self.tools]
+        duplicates = sorted({source_id for source_id in ids if ids.count(source_id) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate tool source IDs: {', '.join(duplicates)}")
+        return self
 
 
 class SSHConfig(BaseModel):
@@ -93,6 +131,7 @@ class HATSConfig(BaseModel):
     schema_version: Literal[1]
     workspace: Workspace
     defaults: Defaults = Field(default_factory=Defaults)
+    sources: Sources = Field(default_factory=Sources)
     targets: dict[str, Target]
 
     @model_validator(mode="after")

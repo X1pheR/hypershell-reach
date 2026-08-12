@@ -82,3 +82,22 @@ targets:
     )
     config = load_config(path)
     assert config.targets["docker"].ssh.host == "192.0.2.10"
+
+
+def test_tool_source_path_must_be_absolute() -> None:
+    payload = _config()
+    payload["sources"] = {"tools": [{"id": "local", "path": "relative/tools"}]}
+    with pytest.raises(ValidationError, match="tool source paths must be absolute"):
+        HATSConfig.model_validate(payload)
+
+
+def test_tool_source_ids_must_be_unique() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "tools": [
+            {"id": "local", "path": "/sources/one"},
+            {"id": "local", "path": "/sources/two"},
+        ]
+    }
+    with pytest.raises(ValidationError, match="duplicate tool source IDs"):
+        HATSConfig.model_validate(payload)

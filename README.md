@@ -17,7 +17,7 @@ flowchart LR
     HATS --> Skills[Skill sources]
 ```
 
-The first implementation phase provides configured targets and bounded SSH execution. Managed tools, runs, tasks and skills are added as separate modules on the same service.
+The current implementation provides configured targets, bounded SSH execution and registry-backed managed scripts. Runs, tasks and skills are added as separate modules on the same service.
 
 ## Design
 
@@ -36,6 +36,12 @@ workspace:
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
 
+sources:
+  tools:
+    - id: local
+      type: filesystem
+      path: /sources/local-tools
+
 targets:
   example:
     display_name: Example host
@@ -52,13 +58,16 @@ See [Configuration](docs/configuration.md) and [`examples/config.example.yaml`](
 
 ## MCP surface
 
-Phase 1 exposes:
+HATS currently exposes:
 
 - `list_targets`
+- `list_scripts`
+- `get_script`
+- `run_script`
 - `run_command`
 - `run_shell`
 
-Later phases add managed tools, run/task continuity and Agent Skills without turning skill content into executable tooling.
+Later phases add run/task continuity and Agent Skills without turning skill content into executable tooling.
 
 See [Tool contracts](docs/tools.md) and [Skills](docs/skills.md).
 

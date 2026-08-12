@@ -10,6 +10,13 @@ defaults:
   max_timeout_seconds: 300
   max_output_bytes: 262144
 
+sources:
+  tools:
+    - id: examples
+      type: filesystem
+      path: /sources/example-tools
+      enabled: true
+
 targets:
   example:
     display_name: Example host

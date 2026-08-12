@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import HATSConfig, load_config
 from .execution import run_ssh
+from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 
 app = Server("hats")
 _config: HATSConfig
@@ -38,6 +39,20 @@ class ShellInput(BaseModel):
     timeout_seconds: int = Field(default=90, ge=1, le=900)
 
 
+class GetScriptInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: str = Field(min_length=3, max_length=190)
+
+
+class RunScriptInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: str = Field(min_length=3, max_length=190)
+    target: str = Field(min_length=1, max_length=63)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
 def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
     target = _config.enabled_target(target_id)
     max_timeout = _config.resolved_max_timeout(target)
@@ -50,6 +65,10 @@ def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, i
         _config.resolved_connect_timeout(target),
         _config.resolved_max_output(target),
     )
+
+
+def _tool_registry():
+    return load_tool_registry(_config.sources.tools)
 
 
 @app.list_tools()
@@ -67,6 +86,49 @@ async def list_tools() -> list[types.Tool]:
                 destructiveHint=False,
                 idempotentHint=True,
                 openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="list_scripts",
+            description=(
+                "List registered managed scripts and compact execution metadata. "
+                "Only configured filesystem sources are scanned."
+            ),
+            inputSchema=EmptyInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="get_script",
+            description=(
+                "Return metadata for one registered managed script, including typed arguments "
+                "and source provenance. Script source code is not returned."
+            ),
+            inputSchema=GetScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="run_script",
+            description=(
+                "Run one registered managed script on a compatible configured target. "
+                "The caller supplies a script ID and typed argument object, never a filesystem "
+                "path, raw argv or arbitrary environment."
+            ),
+            inputSchema=RunScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
             ),
         ),
         types.Tool(
@@ -124,6 +186,36 @@ async def call_tool(
                     }
                     for target_id, target in sorted(_config.targets.items())
                 ]
+            }
+        elif name == "list_scripts":
+            EmptyInput(**arguments)
+            result = {"scripts": [script.summary() for script in _tool_registry().list()]}
+        elif name == "get_script":
+            args = GetScriptInput(**arguments)
+            result = _tool_registry().get(args.script_id).detail()
+        elif name == "run_script":
+            args = RunScriptInput(**arguments)
+            script = _tool_registry().get(args.script_id)
+            target, connect_timeout, max_output = _target_runtime(
+                args.target, script.metadata.timeout_seconds
+            )
+            ensure_target_compatible(script, target.capabilities)
+            execution = await run_ssh(
+                target_id=args.target,
+                target=target,
+                remote_command=build_script_command(script, args.arguments),
+                timeout_seconds=script.metadata.timeout_seconds,
+                connect_timeout_seconds=connect_timeout,
+                max_output_bytes=max_output,
+                stdin_text=script.content,
+            )
+            result = {
+                "script_id": script.metadata.id,
+                "source": script.source_id,
+                "sha256": script.sha256,
+                "mutating": script.metadata.mutating,
+                "idempotent": script.metadata.idempotent,
+                "execution": execution,
             }
         elif name == "run_command":
             args = CommandInput(**arguments)
