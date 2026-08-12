@@ -63,7 +63,7 @@ def _config(tool_root: Path) -> HATSConfig:
 async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, monkeypatch) -> None:
     script_path = tmp_path / "echo.sh"
     _write_script(script_path)
-    monkeypatch.setattr(server, "_config", _config(tmp_path))
+    monkeypatch.setattr(server, "_config", _config(tmp_path), raising=False)
     captured = {}
 
     async def fake_run_ssh(**kwargs):
