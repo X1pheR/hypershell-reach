@@ -119,6 +119,14 @@ HATS does not authorize an agent to perform a change. It provides bounded execut
 
 See [Security](docs/security.md).
 
+## Project governance
+
+- [Contributing](CONTRIBUTING.md) explains the contribution boundary.
+- [Repository agent guide](AGENTS.md) defines instructions for coding agents working in this repository.
+- [Tooling lifecycle](docs/tooling-lifecycle.md) defines how recurring gaps become reusable tooling without creating unnecessary helpers.
+- [Release lifecycle](docs/releasing.md) defines versioning, tagging and release acceptance.
+- [License](LICENSE) contains the MIT license text.
+
 ## Development
 
 See [Development](docs/development.md).
