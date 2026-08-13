@@ -21,9 +21,16 @@ uv run --extra dev pytest
 ├── docs/
 ├── examples/
 ├── src/hats_mcp/
+│   ├── bundled_tools/
+│   ├── cli.py
 │   ├── config.py
 │   ├── execution.py
-│   └── server.py
+│   ├── managed_tools.py
+│   ├── runs.py
+│   ├── server.py
+│   ├── skills.py
+│   ├── tasks.py
+│   └── validation.py
 └── tests/
 ```
 

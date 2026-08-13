@@ -25,6 +25,22 @@ HATS is a modular monolith. Deployment-specific hosts, paths and source location
 
 See [Architecture](docs/architecture.md) for module boundaries and delivery phases.
 
+## Installation
+
+HATS is not published to a package registry yet. Install the current source from a reviewed local checkout:
+
+```bash
+uv tool install .
+```
+
+Then validate the deployment before adding it to an MCP client:
+
+```bash
+HATS_CONFIG=/path/to/hats.yaml hats-mcp validate
+```
+
+See [Installation](docs/installation.md) for upgrade and source-pin guidance.
+
 ## Configuration
 
 HATS reads one YAML configuration file selected by `HATS_CONFIG`.
@@ -95,7 +111,7 @@ HATS currently exposes:
 
 Skill content remains read-only and never becomes executable tooling automatically.
 
-See [Tool contracts](docs/tools.md) and [Skills](docs/skills.md).
+See [Tool contracts](docs/tools.md), [Skills](docs/skills.md) and the optional [MCPJungle example](docs/mcpjungle.md).
 
 ## Security
 

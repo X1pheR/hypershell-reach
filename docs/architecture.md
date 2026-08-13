@@ -88,4 +88,4 @@ A failed or interrupted mutation can leave remote state ambiguous. HATS must rep
 
 Skills are read-only instructions and supporting files. A script stored inside a skill package is still skill content. It does not become a managed HATS tool automatically.
 
-The Hermes source adapter will mirror Hermes' effective skill catalog rather than only scanning directories. This includes enable/disable state and supported provenance while keeping Hermes as the authority for its own skills.
+The Hermes source adapter mirrors Hermes' effective skill catalog rather than only scanning directories. This includes enable/disable state and supported provenance while keeping Hermes as the authority for its own skills.
