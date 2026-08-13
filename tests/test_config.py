@@ -154,3 +154,17 @@ def test_hermes_skill_state_target_must_exist() -> None:
     }
     with pytest.raises(ValidationError, match="unknown Hermes skill-state targets"):
         HATSConfig.model_validate(payload)
+
+
+def test_tooling_registry_path_must_be_absolute() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "tooling_registry": {"type": "markdown", "path": "relative/registry.md"}
+    }
+    with pytest.raises(ValidationError, match="tooling registry path must be absolute"):
+        HATSConfig.model_validate(payload)
+
+
+def test_tooling_registry_source_is_optional() -> None:
+    config = HATSConfig.model_validate(_config())
+    assert config.sources.tooling_registry is None

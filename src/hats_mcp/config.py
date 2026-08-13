@@ -83,11 +83,27 @@ class ToolSource(BaseModel):
         return self
 
 
+class ToolingRegistrySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["markdown"] = "markdown"
+    path: str = Field(min_length=1)
+    enabled: bool = True
+
+    @field_validator("path")
+    @classmethod
+    def require_absolute_path(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("tooling registry path must be absolute")
+        return value
+
+
 class Sources(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tools: list[ToolSource] = Field(default_factory=list)
     skills: list[SkillSource] = Field(default_factory=list)
+    tooling_registry: ToolingRegistrySource | None = None
 
     @model_validator(mode="after")
     def require_unique_source_ids(self) -> "Sources":

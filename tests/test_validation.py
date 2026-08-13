@@ -206,3 +206,57 @@ def test_validate_cli_uses_hats_config_environment(tmp_path: Path, monkeypatch, 
     assert excinfo.value.code == 0
     assert f"File: {config_path}" in capsys.readouterr().out
 
+
+def test_validate_reports_tooling_registry_candidates(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    registry_path = tmp_path / "tooling-registry.md"
+    registry_path.write_text(
+        """### ATR-007 — Repeated selector ambiguity
+- **Status:** guarded
+- **Promotion:** candidate
+- **Promotion reason:** Repeated and deterministic.
+- **Helper candidate or implementation:** Shared selector linting.
+""",
+        encoding="utf-8",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["tooling_registry"] = {
+        "type": "markdown",
+        "path": str(registry_path),
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert "Tooling registry" in report.text
+    assert "Status: valid" in report.text
+    assert "Promotion candidates: 1" in report.text
+
+
+def test_validate_rejects_invalid_tooling_registry(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    registry_path = tmp_path / "tooling-registry.md"
+    registry_path.write_text(
+        """### ATR-007 — Unknown promotion state
+- **Status:** guarded
+- **Promotion:** maybe
+- **Promotion reason:** Unknown.
+- **Helper candidate or implementation:** Unknown.
+""",
+        encoding="utf-8",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["tooling_registry"] = {
+        "type": "markdown",
+        "path": str(registry_path),
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is False
+    assert "Tooling registry" in report.text
+    assert "Status: invalid" in report.text
+    assert "unsupported promotion state" in report.text
+

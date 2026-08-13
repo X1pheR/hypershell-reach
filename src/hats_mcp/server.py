@@ -16,6 +16,7 @@ from .managed_tools import build_script_command, ensure_target_compatible, load_
 from .skills import HermesState, build_skill_registry, list_skill_files, read_skill_file
 from .runs import RunOperation, RunStatus, RunStore
 from .tasks import TaskContinuity, TaskStatus, TaskStore
+from .tooling_registry import ToolingRegistry
 
 app = Server("hats")
 _config: HATSConfig
@@ -348,6 +349,21 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="tooling_candidates",
+            description=(
+                "Return deployment-reviewed reusable-tooling promotion candidates from the "
+                "configured tooling registry. Candidate status is an explicit registry field, "
+                "not inferred from prose."
+            ),
+            inputSchema=EmptyInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="list_targets",
             description=(
                 "List configured HATS target IDs, capabilities and execution limits. "
@@ -584,6 +600,18 @@ async def call_tool(
                 offset=args.offset,
                 max_bytes=args.max_bytes,
             )
+        elif name == "tooling_candidates":
+            EmptyInput(**arguments)
+            source = _config.sources.tooling_registry
+            if source is None or not source.enabled:
+                result = {"configured": False, "candidates": [], "count": 0}
+            else:
+                candidates = ToolingRegistry(source.path).candidates()
+                result = {
+                    "configured": True,
+                    "candidates": [candidate.summary() for candidate in candidates],
+                    "count": len(candidates),
+                }
         elif name == "list_targets":
             EmptyInput(**arguments)
             result = {

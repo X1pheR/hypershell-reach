@@ -69,6 +69,20 @@ Filesystem source delivery through Git checkout, bind mounts, SMB, rsync or anot
 
 Source IDs must be unique. Managed script IDs must be globally unique across enabled sources. A duplicate is a configuration/runtime error rather than a precedence rule.
 
+## Tooling registry
+
+```yaml
+sources:
+  tooling_registry:
+    type: markdown
+    path: /sources/tooling-registry.md
+    enabled: true
+```
+
+The tooling registry is optional and deployment-owned. HATS currently reads only explicit promotion metadata from the registry for `tooling_candidates`; it does not infer candidate status from prose. Candidate entries use the same source registry rather than a separate candidate store.
+
+A candidate entry must declare `Status: observed|guarded`, `Promotion: candidate`, a non-empty `Promotion reason` and a non-empty `Helper candidate or implementation` field. Entries without a `Promotion` field remain valid and are omitted from the candidate view. Registry mutation is not part of the current MCP surface.
+
 ## Targets
 
 ```yaml

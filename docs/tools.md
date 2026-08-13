@@ -130,6 +130,12 @@ Counts an exact byte sequence from one bounded needle file inside another bounde
 
 Exit `0` means the exact count matched, `1` means the observed count differed and `2` means the local file contract was invalid. The tool is read-only and replaces the literal match-count mode from the legacy Compose preflight without coupling that generic filesystem check to Docker Compose.
 
+## `tooling_candidates`
+
+The read-only candidate view returns explicit reusable-tooling promotion candidates from the optional configured tooling registry. Candidate status must be declared in the source entry; HATS does not infer it from free-form prose.
+
+The view is derived from the source registry rather than stored separately. Registry mutation is outside the current MCP surface.
+
 ## Raw execution
 
 ### `run_command`

@@ -15,6 +15,7 @@ flowchart LR
     Server --> Runs[Run state]
     Server --> Tasks[Task state]
     Server --> Skills[Skill sources]
+    Server --> Registry[Optional tooling registry]
 ```
 
 One process owns configuration, target lookup, tool discovery and local state. HATS does not require a separate controller, database server or worker service.
@@ -30,6 +31,7 @@ One process owns configuration, target lookup, tool discovery and local state. H
 | Runs | Record technical execution state and ambiguous/interrupted outcomes. |
 | Tasks | Keep durable continuity only for work that needs recovery or handoff. |
 | Skills | Discover and retrieve read-only Agent Skills from configured sources. |
+| Tooling registry | Validate an optional deployment-owned registry and derive explicit promotion candidates without a second candidate store. |
 
 ## Managed tool execution
 

@@ -43,4 +43,4 @@ Promotion remains a reviewed decision. A registry can surface candidates automat
 
 Use one governed failure registry rather than duplicating evidence into a second candidate registry. Candidate status is a view over recorded failures and friction that meet the promotion criteria above.
 
-A future HATS registry integration should own generic schema and read/write mechanics while private deployment entries remain deployment-owned. Read access can be broadly useful; mutation should be a typed, explicitly mutating operation rather than arbitrary document editing.
+HATS exposes the optional read-only candidate view from a deployment-owned tooling registry. Candidate state is explicit registry metadata, never a prose heuristic. Future catalog/get or mutation tools should reuse the same registry contract; mutation must be typed and explicit rather than arbitrary document editing.

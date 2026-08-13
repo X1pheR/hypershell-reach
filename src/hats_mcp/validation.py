@@ -8,6 +8,7 @@ from pathlib import Path
 from .config import HATSConfig, load_config
 from .managed_tools import load_tool_registry, resolve_tool_source_root
 from .skills import inspect_skill_source
+from .tooling_registry import ToolingRegistry
 
 _SSH_EXECUTABLE = Path("/usr/bin/ssh")
 
@@ -196,6 +197,27 @@ def _skill_source_lines(config: HATSConfig) -> tuple[list[str], int]:
     return lines, errors
 
 
+def _tooling_registry_lines(config: HATSConfig) -> tuple[list[str], int]:
+    source = config.sources.tooling_registry
+    if source is None or not source.enabled:
+        return ["Tooling registry", "  Status: not configured"], 0
+    try:
+        entries = ToolingRegistry(source.path).candidates()
+    except ValueError as exc:
+        return [
+            "Tooling registry",
+            "  Status: invalid",
+            f"  Path: {source.path}",
+            f"  Error: {_compact_error(exc)}",
+        ], 1
+    return [
+        "Tooling registry",
+        "  Status: valid",
+        f"  Path: {source.path}",
+        f"  Promotion candidates: {len(entries)}",
+    ], 0
+
+
 def _workspace_lines(config: HATSConfig) -> tuple[list[str], int]:
     checks: list[tuple[str, str, bool, str]] = []
     errors = 0
@@ -298,7 +320,14 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
         ]
     ]
     error_count = 0
-    for builder in (_workspace_lines, _target_lines, _tool_source_lines, _skill_source_lines, _ssh_lines):
+    for builder in (
+        _workspace_lines,
+        _target_lines,
+        _tool_source_lines,
+        _skill_source_lines,
+        _tooling_registry_lines,
+        _ssh_lines,
+    ):
         lines, errors = builder(config)
         error_count += errors
         sections.append(lines)

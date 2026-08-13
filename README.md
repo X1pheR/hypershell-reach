@@ -17,7 +17,7 @@ flowchart LR
     HATS --> Skills[Skill sources]
 ```
 
-The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata, task continuity and progressive read-only Agent Skills discovery.
+The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata, task continuity, progressive read-only Agent Skills discovery and an optional read-only tooling-candidate view.
 
 ## Design
 
@@ -106,6 +106,7 @@ HATS currently exposes:
 - `skills_catalog` — compact live tier-1 discovery
 - `skill_get` — bounded selected skill content
 - `skill_read_file` — bounded supporting-file retrieval
+- `tooling_candidates` — explicit deployment-reviewed reusable-tooling candidates
 - `run_command`
 - `run_shell`
 
