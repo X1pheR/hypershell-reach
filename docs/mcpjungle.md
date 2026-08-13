@@ -27,15 +27,17 @@ Do not expose the complete HATS server to every consumer merely because it is re
 
 HATS tool metadata does not replace gateway or agent authorization policy.
 
-## Source-managed deployment
+## Deployment source
 
-When MCPJungle runs HATS directly from a checkout, keep the source revision explicit and dependencies frozen. A deployment wrapper may fail closed unless the checkout is clean and at the expected revision before executing:
+For maintained deployment, prefer installing an exact verified HATS release artifact into the gateway runtime and execute `hats-mcp` directly. This avoids a runtime dependency on a mutable Git checkout.
+
+Running from an exact clean checkout remains supported for development and transition deployments:
 
 ```bash
 uv run --frozen --directory /path/to/hats-source hats-mcp
 ```
 
-The wrapper is deployment-specific and should remain outside the generic HATS repository when it contains local paths or policy.
+Any source-pin wrapper is deployment-specific and should remain outside the generic HATS repository when it contains local paths or policy.
 
 ## Persistent state
 

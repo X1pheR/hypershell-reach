@@ -1,21 +1,24 @@
 # Installation
 
-HATS currently ships as source and is not published to a package registry.
+HATS releases publish a Python wheel, source distribution and SHA-256 manifest through GitHub Releases. HATS is not published to a language package registry.
 
 ## Requirements
 
 - Python 3.12 or newer;
-- `uv`;
+- `uv` for source development or environment management;
 - OpenSSH client when SSH targets are configured;
 - deployment-owned SSH identities and known-host files;
 - one HATS YAML configuration file.
 
-## Install from a reviewed checkout
+## Install an immutable release
 
-Clone or otherwise obtain the source at a revision you intend to run, then install it locally:
+Download the wheel and `SHA256SUMS` from the selected GitHub release, verify the wheel against the manifest, and install that exact artifact into the deployment environment.
+
+Example after the release assets have been obtained locally:
 
 ```bash
-uv tool install .
+sha256sum --check SHA256SUMS --ignore-missing
+uv tool install ./homelab_agent_tooling_skills_mcp-0.1.0-py3-none-any.whl
 ```
 
 The installed command is:
@@ -30,27 +33,23 @@ Validate configuration and local prerequisites before connecting an MCP client:
 HATS_CONFIG=/path/to/hats.yaml hats-mcp validate
 ```
 
-## Run from a pinned checkout
+## Development from a reviewed checkout
 
-A deployment can also keep HATS source-managed and run directly from an exact reviewed checkout:
+A development environment may run directly from an exact clean checkout:
 
 ```bash
 uv run --frozen --directory /path/to/hats-source hats-mcp
 ```
 
-For this model, keep the checkout clean and verify the expected Git revision before starting the MCP child. HATS does not require Git at runtime itself; the revision check is a deployment concern.
+This is a development and transition model. Maintained deployment should prefer a verified release artifact so runtime does not depend on mutable Git checkout state.
 
 ## Upgrade
 
-1. Review and test the new source revision.
-2. Update the local checkout or installed tool.
-3. Keep the deployment configuration separate from the generic source tree.
+1. Review the new release notes and checksum manifest.
+2. Install the selected exact wheel into the deployment environment.
+3. Keep deployment configuration separate from the generic product source.
 4. Run `hats-mcp validate`.
 5. Start or refresh only the HATS MCP child.
-6. Re-run consumer acceptance for target execution, managed tools and any configured skill adapters that changed.
+6. Re-run consumer acceptance for target execution, managed tools, tooling candidates and configured skill adapters that changed.
 
 Persistent Runs and Tasks live in configured workspace paths and are independent of the Python package installation. Do not remove those paths as part of a normal package upgrade.
-
-## Package registry
-
-No public package-registry release is claimed by the current project. If a registry distribution is added later, document the exact package name and release verification here rather than relying on an unverified installation command.

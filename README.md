@@ -27,11 +27,7 @@ See [Architecture](docs/architecture.md) for module boundaries and delivery phas
 
 ## Installation
 
-HATS is not published to a package registry yet. Install the current source from a reviewed local checkout:
-
-```bash
-uv tool install .
-```
+HATS releases provide a wheel, source distribution and SHA-256 manifest through GitHub Releases. Install an exact verified release artifact for maintained deployment; use a reviewed checkout only for development or transition work.
 
 Then validate the deployment before adding it to an MCP client:
 
