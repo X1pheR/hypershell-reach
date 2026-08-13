@@ -80,6 +80,7 @@ class RunRecord(BaseModel):
             "target": self.target,
             "task_id": self.task_id,
             "script_id": self.script_id,
+            "may_mutate": self.may_mutate,
             "idempotent": self.idempotent,
             "status": self.status,
             "ambiguous": self.ambiguous,

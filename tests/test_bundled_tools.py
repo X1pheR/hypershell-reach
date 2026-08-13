@@ -15,6 +15,7 @@ PERFORMANCE_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/performance/host-preflig
 GIT_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/git/summary-bounded.py"
 SNAPSHOT_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/snapshot-modes.py"
 COMPARE_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/compare-modes.py"
+LITERAL_MATCH_COUNT_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/literal-match-count.py"
 
 
 def _load(name: str, path: Path):
@@ -29,6 +30,7 @@ performance = _load("performance_host_preflight", PERFORMANCE_SCRIPT)
 git_summary = _load("git_summary_bounded", GIT_SCRIPT)
 snapshot_modes = _load("filesystem_snapshot_modes", SNAPSHOT_MODES_SCRIPT)
 compare_modes = _load("filesystem_compare_modes", COMPARE_MODES_SCRIPT)
+literal_match_count = _load("filesystem_literal_match_count", LITERAL_MATCH_COUNT_SCRIPT)
 
 
 def _git(repo: Path, *arguments: str) -> None:
@@ -66,6 +68,7 @@ def test_bundled_registry_contains_expected_tools() -> None:
     assert set(scripts) == {
         "filesystem.compare-modes",
         "filesystem.snapshot-modes",
+        "filesystem.literal-match-count",
         "git.summary-bounded",
         "performance.host-preflight",
     }
@@ -103,6 +106,16 @@ def test_bundled_registry_contains_expected_tools() -> None:
     assert compare_script.metadata.mutating is False
     assert compare_script.metadata.idempotent is True
     assert compare_script.metadata.required_capabilities() == ["linux", "python3"]
+
+    match_script = scripts["filesystem.literal-match-count"]
+    assert match_script.metadata.mutating is False
+    assert match_script.metadata.idempotent is True
+    assert match_script.metadata.required_capabilities() == ["linux", "python3"]
+    assert [argument.name for argument in match_script.metadata.arguments] == [
+        "file",
+        "needle_file",
+        "expected",
+    ]
 
     git_script = scripts["git.summary-bounded"]
     assert git_script.source_id == "hats"
@@ -229,6 +242,34 @@ def test_mode_snapshot_and_compare_detect_regression(tmp_path: Path) -> None:
     assert match_exit == 0
     assert match_payload["mismatches"] == 0
     assert match_payload["details"] == []
+
+
+def test_literal_match_count_matches_legacy_contract(tmp_path: Path) -> None:
+    target = tmp_path / "target.yaml"
+    needle = tmp_path / "needle.txt"
+    target.write_bytes(b"service:\n  restart: unless-stopped\nother:\n  restart: unless-stopped\n")
+    needle.write_bytes(b"service:\n  restart: unless-stopped\n")
+
+    payload, exit_code = literal_match_count.count_matches(target, needle, 1)
+    assert exit_code == 0
+    assert payload["actual"] == 1
+    assert payload["status"] == "passed"
+
+    payload, exit_code = literal_match_count.count_matches(target, needle, 2)
+    assert exit_code == 1
+    assert payload["actual"] == 1
+    assert payload["status"] == "failed"
+
+
+def test_literal_match_count_rejects_empty_needle(tmp_path: Path) -> None:
+    target = tmp_path / "target.txt"
+    needle = tmp_path / "needle.txt"
+    target.write_text("fixture\n", encoding="utf-8")
+    needle.write_bytes(b"")
+
+    payload, exit_code = literal_match_count.count_matches(target, needle, 1)
+    assert exit_code == 2
+    assert payload["status"] == "error"
 
 
 def test_mode_compare_accepts_legacy_v1_snapshot(tmp_path: Path) -> None:

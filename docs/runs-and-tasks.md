@@ -22,7 +22,7 @@ Run records contain execution metadata only. They never persist:
 - stdout or stderr text;
 - target addresses, users or credential paths.
 
-A run can contain script ID, source, content hash, argument names, target ID, timestamps, exit status, declared idempotency and output byte/truncation counters. Managed tools persist their declared `idempotent` value. Raw command and shell runs store `idempotent: null` because HATS cannot infer it safely.
+A run can contain script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency and output byte/truncation counters. Compact run listings expose both `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because HATS cannot infer repeat safety from arbitrary caller input.
 
 ### States
 

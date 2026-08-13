@@ -124,6 +124,12 @@ Reads an `agent-tooling-file-modes-v1` snapshot and compares up to 256 entries a
 
 Unlike the legacy helper, comparison returns JSON only through stdout; HATS owns output transport and Run metadata, so a second `--json-output` write path is unnecessary.
 
+### `filesystem.literal-match-count`
+
+Counts an exact byte sequence from one bounded needle file inside another bounded file and asserts the expected count. It is intended for pre-change anchor checks where textual normalization would be unsafe. Both paths must be absolute; the target is capped at 16 MiB and the needle at 1 MiB. Empty needles are rejected.
+
+Exit `0` means the exact count matched, `1` means the observed count differed and `2` means the local file contract was invalid. The tool is read-only and replaces the literal match-count mode from the legacy Compose preflight without coupling that generic filesystem check to Docker Compose.
+
 ## Raw execution
 
 ### `run_command`

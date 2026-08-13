@@ -58,6 +58,7 @@ def test_managed_run_persists_declared_idempotency(tmp_path) -> None:
     finished = store.finish(record.id, _execution())
 
     assert finished.idempotent is False
+    assert finished.summary()["may_mutate"] is True
     assert finished.summary()["idempotent"] is False
 
 
