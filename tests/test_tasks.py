@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import yaml
+from pydantic import ValidationError
 
 from hats_mcp.tasks import TaskStore
 
@@ -31,6 +33,86 @@ def test_create_task_builds_task_and_evidence_directory(tmp_path) -> None:
     assert (directory / "task.yaml").is_file()
     assert (directory / "evidence").is_dir()
     assert store.get(record.id).status == "active"
+    assert store.get(record.id).continuity.model_dump() == {
+        "authorization": None,
+        "sources": [],
+        "completed": [],
+        "validation": [],
+        "cleanup": [],
+        "recovery": None,
+        "blockers": [],
+        "assumptions": [],
+    }
+
+
+def test_task_continuity_snapshot_is_structured_bounded_and_replaceable(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "trash")
+    record = store.create(
+        title="Example",
+        objective="Do work",
+        continuity={
+            "authorization": "Change only the approved example target.",
+            "sources": [
+                {
+                    "classification": "configured",
+                    "reference": "config/example.yaml",
+                    "purpose": "Canonical desired state.",
+                }
+            ],
+            "completed": ["Read current configuration."],
+            "validation": ["Preflight passed."],
+            "cleanup": [],
+            "recovery": "Restore the previous Git revision if needed.",
+            "blockers": ["Runtime activation still needs approval."],
+            "assumptions": [
+                {
+                    "statement": "The target configuration has not changed since preflight.",
+                    "evidence_class": "configured",
+                    "impact_if_wrong": "high",
+                    "decision": "Re-read before activation.",
+                }
+            ],
+        },
+    )
+
+    assert record.continuity.sources[0].classification == "configured"
+    assert record.continuity.assumptions[0].impact_if_wrong == "high"
+
+    updated = store.update(
+        record.id,
+        continuity={
+            "authorization": "Change only the approved example target.",
+            "completed": ["Read current configuration.", "Applied the bounded source change."],
+            "validation": ["Preflight passed.", "Changed-scope validation passed."],
+            "cleanup": ["Temporary fixture removed."],
+            "recovery": "Restore the previous Git revision if needed.",
+            "blockers": [],
+        },
+    )
+    assert updated.continuity.completed[-1] == "Applied the bounded source change."
+    assert updated.continuity.blockers == []
+    assert updated.continuity.sources == []
+
+    with pytest.raises(ValidationError):
+        store.update(
+            record.id,
+            continuity={"completed": [f"item-{index}" for index in range(51)]},
+        )
+
+
+def test_existing_task_without_continuity_reads_with_empty_snapshot(tmp_path) -> None:
+    tasks = tmp_path / "tasks"
+    trash = tmp_path / "trash"
+    store = TaskStore(tasks, trash)
+    record = store.create(title="Legacy", objective="Read an older v1 task record")
+    path = tasks / record.id / "task.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    payload.pop("continuity")
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    loaded = store.get(record.id)
+    assert loaded.continuity.completed == []
+    assert loaded.continuity.authorization is None
 
 
 def test_task_update_supports_open_states_and_terminal_closure(tmp_path) -> None:

@@ -22,7 +22,7 @@ Run records contain execution metadata only. They never persist:
 - stdout or stderr text;
 - target addresses, users or credential paths.
 
-A run can contain script ID, source, content hash, argument names, target ID, timestamps, exit status and output byte/truncation counters.
+A run can contain script ID, source, content hash, argument names, target ID, timestamps, exit status, declared idempotency and output byte/truncation counters. Managed tools persist their declared `idempotent` value. Raw command and shell runs store `idempotent: null` because HATS cannot infer it safely.
 
 ### States
 
@@ -71,6 +71,10 @@ tasks/<task-id>/
 ├── task.yaml
 └── evidence/
 ```
+
+`task.yaml` keeps the compact task identity and one replaceable `continuity` snapshot. The snapshot can hold bounded authorization context, authoritative sources, completed material work, validation, cleanup, recovery, blockers and material assumptions. Each assumption records its statement, evidence class, impact if wrong and bounded decision. This is intended for safe resume or handoff, not command history or project management.
+
+`update_task` replaces the supplied continuity snapshot rather than accumulating checkpoints. This keeps current state compact and lets callers remove obsolete handoff information deliberately. Older v1 task records without `continuity` remain valid and load with an empty snapshot.
 
 HATS creates the evidence directory as a bounded place for deployment-specific evidence workflows. The v1 MCP surface does not provide an arbitrary evidence-file writer.
 

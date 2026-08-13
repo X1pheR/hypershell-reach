@@ -58,6 +58,7 @@ class RunRecord(BaseModel):
     argument_names: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(ge=1, le=900)
     may_mutate: bool
+    idempotent: bool | None = None
     retained: bool = False
     started_at: str
     ended_at: str | None = None
@@ -79,6 +80,7 @@ class RunRecord(BaseModel):
             "target": self.target,
             "task_id": self.task_id,
             "script_id": self.script_id,
+            "idempotent": self.idempotent,
             "status": self.status,
             "ambiguous": self.ambiguous,
             "retained": self.retained,
@@ -137,6 +139,7 @@ class RunStore:
         target: str,
         timeout_seconds: int,
         may_mutate: bool,
+        idempotent: bool | None = None,
         task_id: str | None = None,
         script_id: str | None = None,
         script_source: str | None = None,
@@ -155,6 +158,7 @@ class RunStore:
             argument_names=sorted(argument_names or []),
             timeout_seconds=timeout_seconds,
             may_mutate=may_mutate,
+            idempotent=idempotent,
             started_at=format_timestamp(now),
         )
         self._atomic_write(record)

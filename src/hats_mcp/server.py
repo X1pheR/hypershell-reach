@@ -15,7 +15,7 @@ from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .skills import HermesState, build_skill_registry, list_skill_files, read_skill_file
 from .runs import RunOperation, RunStatus, RunStore
-from .tasks import TaskStatus, TaskStore
+from .tasks import TaskContinuity, TaskStatus, TaskStore
 
 app = Server("hats")
 _config: HATSConfig
@@ -119,6 +119,7 @@ class CreateTaskInput(BaseModel):
     objective: str = Field(min_length=1, max_length=4_000)
     project_ref: str | None = Field(default=None, min_length=1, max_length=256)
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
+    continuity: TaskContinuity = Field(default_factory=TaskContinuity)
     retained: bool = False
 
 
@@ -133,6 +134,7 @@ class UpdateTaskInput(BaseModel):
     status: TaskStatus | None = None
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
     clear_next_action: bool = False
+    continuity: TaskContinuity | None = None
     retained: bool | None = None
 
 
@@ -193,6 +195,7 @@ async def _tracked_ssh_run(
     connect_timeout_seconds: int,
     max_output_bytes: int,
     may_mutate: bool,
+    idempotent: bool | None = None,
     task_id: str | None = None,
     stdin_text: str | None = None,
     script_id: str | None = None,
@@ -213,6 +216,7 @@ async def _tracked_ssh_run(
         argument_names=argument_names,
         timeout_seconds=timeout_seconds,
         may_mutate=may_mutate,
+        idempotent=idempotent,
     )
     try:
         execution = await run_ssh(
@@ -644,6 +648,7 @@ async def call_tool(
                 objective=args.objective,
                 project_ref=args.project_ref,
                 next_action=args.next_action,
+                continuity=args.continuity,
                 retained=args.retained,
             ).model_dump()
         elif name == "update_task":
@@ -657,6 +662,7 @@ async def call_tool(
                 status=args.status,
                 next_action=args.next_action,
                 clear_next_action=args.clear_next_action,
+                continuity=args.continuity,
                 retained=args.retained,
             ).model_dump()
         elif name == "archive_task":
@@ -678,6 +684,7 @@ async def call_tool(
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
                 may_mutate=script.metadata.mutating,
+                idempotent=script.metadata.idempotent,
                 task_id=args.task_id,
                 stdin_text=script.content,
                 script_id=script.metadata.id,

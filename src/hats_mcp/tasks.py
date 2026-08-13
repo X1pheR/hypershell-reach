@@ -5,13 +5,16 @@ import re
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Annotated, Callable, Literal
 from uuid import uuid4
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 TaskStatus = Literal["active", "partial", "blocked", "completed", "cancelled"]
+EvidenceClass = Literal["observed", "configured", "documented", "planned", "unknown"]
+AssumptionImpact = Literal["low", "medium", "high"]
+BoundedTaskText = Annotated[str, Field(min_length=1, max_length=1_000)]
 
 _TASK_ID = re.compile(r"^task-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _OPEN_STATUSES = {"active", "partial", "blocked"}
@@ -35,6 +38,36 @@ def new_task_id(now: datetime | None = None) -> str:
     return f"task-{value.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex[:12]}"
 
 
+class TaskSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    classification: EvidenceClass
+    reference: str = Field(min_length=1, max_length=512)
+    purpose: str = Field(min_length=1, max_length=1_000)
+
+
+class TaskAssumption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=1_000)
+    evidence_class: EvidenceClass
+    impact_if_wrong: AssumptionImpact
+    decision: str = Field(min_length=1, max_length=1_000)
+
+
+class TaskContinuity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authorization: str | None = Field(default=None, min_length=1, max_length=2_000)
+    sources: list[TaskSource] = Field(default_factory=list, max_length=20)
+    completed: list[BoundedTaskText] = Field(default_factory=list, max_length=50)
+    validation: list[BoundedTaskText] = Field(default_factory=list, max_length=50)
+    cleanup: list[BoundedTaskText] = Field(default_factory=list, max_length=25)
+    recovery: str | None = Field(default=None, min_length=1, max_length=2_000)
+    blockers: list[BoundedTaskText] = Field(default_factory=list, max_length=25)
+    assumptions: list[TaskAssumption] = Field(default_factory=list, max_length=20)
+
+
 class TaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +78,7 @@ class TaskRecord(BaseModel):
     project_ref: str | None = Field(default=None, min_length=1, max_length=256)
     status: TaskStatus = "active"
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
+    continuity: TaskContinuity = Field(default_factory=TaskContinuity)
     retained: bool = False
     created_at: str
     updated_at: str
@@ -145,6 +179,7 @@ class TaskStore:
         objective: str,
         project_ref: str | None = None,
         next_action: str | None = None,
+        continuity: TaskContinuity | None = None,
         retained: bool = False,
     ) -> TaskRecord:
         now = self._now()
@@ -154,6 +189,7 @@ class TaskStore:
             objective=objective,
             project_ref=project_ref,
             next_action=next_action,
+            continuity=continuity or TaskContinuity(),
             retained=retained,
             created_at=format_timestamp(now),
             updated_at=format_timestamp(now),
@@ -225,6 +261,7 @@ class TaskStore:
         status: TaskStatus | None = None,
         next_action: str | None = None,
         clear_next_action: bool = False,
+        continuity: TaskContinuity | None = None,
         retained: bool | None = None,
     ) -> TaskRecord:
         directory = self._current_dir(task_id)
@@ -252,6 +289,8 @@ class TaskStore:
             updates["status"] = status
         if next_action is not None or clear_next_action:
             updates["next_action"] = None if clear_next_action else next_action
+        if continuity is not None:
+            updates["continuity"] = continuity
         if retained is not None:
             updates["retained"] = retained
 

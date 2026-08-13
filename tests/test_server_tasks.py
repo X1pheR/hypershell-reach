@@ -49,9 +49,25 @@ async def test_task_lifecycle_and_run_linkage(tmp_path, monkeypatch) -> None:
 
     created_content = await server.call_tool(
         "create_task",
-        {"title": "Example", "objective": "Keep continuity", "next_action": "Inspect"},
+        {
+            "title": "Example",
+            "objective": "Keep continuity",
+            "next_action": "Inspect",
+            "continuity": {
+                "authorization": "Use only the configured example target.",
+                "sources": [
+                    {
+                        "classification": "configured",
+                        "reference": "config/example.yaml",
+                        "purpose": "Canonical target definition.",
+                    }
+                ],
+                "completed": ["Preflight context captured."],
+            },
+        },
     )
     created = json.loads(created_content[0].text)
+    assert created["continuity"]["authorization"] == "Use only the configured example target."
 
     async def fake_run_ssh(**kwargs):
         return {
@@ -71,7 +87,23 @@ async def test_task_lifecycle_and_run_linkage(tmp_path, monkeypatch) -> None:
     )
     run = json.loads(run_content[0].text)
 
-    assert server._run_store_instance.get(run["run_id"]).task_id == created["id"]
+    linked_run = server._run_store_instance.get(run["run_id"])
+    assert linked_run.task_id == created["id"]
+    assert linked_run.idempotent is None
+
+    updated_content = await server.call_tool(
+        "update_task",
+        {
+            "task_id": created["id"],
+            "continuity": {
+                "authorization": "Use only the configured example target.",
+                "completed": ["Preflight context captured.", "Execution completed."],
+                "validation": ["Linked run succeeded."],
+            },
+        },
+    )
+    updated = json.loads(updated_content[0].text)
+    assert updated["continuity"]["validation"] == ["Linked run succeeded."]
 
     await server.call_tool("update_task", {"task_id": created["id"], "status": "completed"})
     archived_content = await server.call_tool("archive_task", {"task_id": created["id"]})

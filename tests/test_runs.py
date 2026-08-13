@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 from hats_mcp.runs import RunStore
 
@@ -41,6 +42,39 @@ def test_run_record_excludes_execution_content(tmp_path) -> None:
     assert "secret output" not in payload
     assert "secret error" not in payload
     assert '"operation": "run_command"' in payload
+    assert finished.idempotent is None
+
+
+def test_managed_run_persists_declared_idempotency(tmp_path) -> None:
+    store = RunStore(tmp_path)
+    record = store.create(
+        operation="run_script",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=True,
+        idempotent=False,
+        script_id="system.example",
+    )
+    finished = store.finish(record.id, _execution())
+
+    assert finished.idempotent is False
+    assert finished.summary()["idempotent"] is False
+
+
+def test_existing_run_without_idempotent_reads_as_unknown(tmp_path) -> None:
+    store = RunStore(tmp_path)
+    record = store.create(
+        operation="run_command",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=True,
+    )
+    path = tmp_path / f"{record.id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("idempotent")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert store.get(record.id).idempotent is None
 
 
 def test_mutating_transport_failure_is_ambiguous(tmp_path) -> None:

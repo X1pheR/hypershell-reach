@@ -94,3 +94,6 @@ async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, mo
     assert captured["remote_command"] == "bash -s -- --message 'hello world'"
     assert captured["stdin_text"] == script_path.read_text(encoding="utf-8")
     assert captured["timeout_seconds"] == 15
+    run = server._run_store_instance.get(result["run_id"])
+    assert run.may_mutate is False
+    assert run.idempotent is True
