@@ -21,7 +21,7 @@ The current implementation provides configured targets, bounded SSH execution, r
 
 ## Design
 
-HATS is a modular monolith. Deployment-specific hosts, paths and source locations stay in configuration. The repository contains no deployment-specific configuration or private homelab data.
+HATS is a modular monolith. Deployment-specific hosts, paths and source locations stay in external configuration. The repository contains no deployment-specific configuration or private homelab data. A private deployment should normally keep that configuration and any private managed-tool extensions in its existing infrastructure/configuration source rather than creating a dedicated HATS overlay repository solely for privacy.
 
 See [Architecture](docs/architecture.md) for module boundaries and delivery phases.
 

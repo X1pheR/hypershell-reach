@@ -66,17 +66,31 @@ Each phase must leave the service usable. Later modules must not weaken the exec
 
 ## Source boundary
 
-The HATS repository owns generic product code, schemas, examples and tests. Homelab-specific tools and skills can live in separate repositories or mounted directories.
+The HATS repository owns generic product code, schemas, examples and tests. Deployment-specific non-secret configuration, target inventory and private managed-tool or skill sources stay outside the product repository and should normally be owned by the deployment's existing private infrastructure or configuration source.
+
+A deployment does not need a dedicated private HATS overlay repository merely to keep configuration private. Use a separate private repository only when an independent lifecycle, ownership or security boundary requires one.
 
 ```mermaid
 flowchart LR
-    Public[HATS repository] --> Service[HATS service]
+    Product[HATS product repository] --> Service[HATS service]
+    Deployment[Private deployment configuration] --> Service
     PrivateTools[Private tool source] --> Service
     Hermes[Hermes active skills] --> Service
     LocalSkills[Other skill source] --> Service
 ```
 
 HATS consumes configured filesystem sources. It does not own their Git, rsync or mount lifecycle.
+
+## Optional web UI
+
+A future HATS web UI should remain part of the same product repository, release and image rather than becoming a separate product by default. The MCP and UI are separate runtime roles:
+
+```text
+hats-mcp   # STDIO MCP entrypoint, for example as an MCP gateway child
+hats-ui    # optional HTTP entrypoint in a separate long-running container/process
+```
+
+The first UI should be read-only and reuse the HATS domain models and configured state. Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
 
 ## Execution boundary
 

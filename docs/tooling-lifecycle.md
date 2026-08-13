@@ -17,8 +17,9 @@ HATS should reduce repeated operational friction without turning every incident 
 
 ## Ownership
 
-- Generic reusable agent capability belongs in the HATS product.
-- Private deployment-specific agent capability belongs in the private deployment extension source.
+- Generic reusable agent capability belongs in the HATS product repository.
+- Deployment-specific non-secret configuration, target inventory, source bindings and private managed-tool extensions belong by default in the deployment's existing private infrastructure or configuration source.
+- Do not create a dedicated private HATS overlay repository solely to keep deployment configuration private. Use a separate private repository only when an independent lifecycle, ownership or security boundary requires one.
 - Application-specific behavior belongs in the application repository.
 - Domain operator helpers belong with the domain or infrastructure source that owns their lifecycle.
 - Governance validators belong with the governance source they validate.
