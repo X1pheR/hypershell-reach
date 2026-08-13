@@ -92,7 +92,19 @@ class ToolingRegistry:
             )
             fields = {}
 
+        fence_marker: str | None = None
         for raw_line in text.splitlines():
+            stripped = raw_line.lstrip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                marker = stripped[:3]
+                if fence_marker is None:
+                    fence_marker = marker
+                elif marker == fence_marker:
+                    fence_marker = None
+                continue
+            if fence_marker is not None:
+                continue
+
             heading = _HEADING.match(raw_line)
             if heading:
                 finish_entry()

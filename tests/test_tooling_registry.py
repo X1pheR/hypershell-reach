@@ -99,3 +99,28 @@ def test_registry_rejects_unknown_promotion_state(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="unsupported promotion state"):
         ToolingRegistry(path).candidates()
+
+
+def test_registry_ignores_entry_templates_inside_fenced_code(tmp_path) -> None:
+    path = tmp_path / "tooling-registry.md"
+    path.write_text(
+        """# Registry
+
+```markdown
+### ATR-NNN — Short failure name
+- **Status:** observed|guarded|automated|retired
+- **Promotion:** candidate|blocked|not-warranted|implemented
+```
+
+### ATR-022 — Real candidate
+- **Status:** guarded
+- **Promotion:** candidate
+- **Promotion reason:** Repeated and deterministic.
+- **Helper candidate or implementation:** OIDC preflight.
+""",
+        encoding="utf-8",
+    )
+
+    candidates = ToolingRegistry(path).candidates()
+
+    assert [entry.id for entry in candidates] == ["ATR-022"]
