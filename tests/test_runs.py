@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 
+import pytest
+
 from hats_mcp.runs import RunStore
 
 
@@ -124,6 +126,27 @@ def test_running_records_become_interrupted_on_store_start(tmp_path) -> None:
     assert recovered.status == "interrupted"
     assert recovered.ambiguous is True
     assert recovered.error_type == "ServerRestart"
+
+
+def test_read_only_store_does_not_reconcile_or_mutate(tmp_path) -> None:
+    writable = RunStore(tmp_path)
+    record = writable.create(
+        operation="run_shell",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=True,
+    )
+    path = tmp_path / f"{record.id}.json"
+    before = path.read_bytes()
+
+    read_only = RunStore(tmp_path, read_only=True)
+
+    assert read_only.get(record.id).status == "running"
+    assert path.read_bytes() == before
+    with pytest.raises(RuntimeError, match="read-only"):
+        read_only.set_retained(record.id, True)
+    with pytest.raises(RuntimeError, match="read-only"):
+        read_only.cleanup()
 
 
 def test_retention_removes_only_old_unambiguous_terminal_runs(tmp_path) -> None:

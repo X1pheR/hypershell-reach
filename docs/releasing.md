@@ -5,7 +5,7 @@ HATS uses Semantic Versioning. While the project is on `0.x`, minor versions may
 ## Release flow
 
 1. Start from a clean `main` checkout that matches the remote branch.
-2. Run `uv run --frozen --extra dev pytest` and require repository CI for the exact commit to pass.
+2. Run `uv run --frozen --extra dev pytest`, build the repository Dockerfile, and require repository CI for the exact commit to pass.
 3. Update the package version in `pyproject.toml` as part of the reviewed release commit.
 4. Review user-facing changes, configuration compatibility, tool IDs and documented migration notes.
 5. Create an annotated Git tag named `vX.Y.Z`; the tag version must match `pyproject.toml`.

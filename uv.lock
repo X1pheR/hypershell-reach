@@ -215,12 +215,14 @@ wheels = [
 
 [[package]]
 name = "homelab-agent-tooling-skills-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -236,6 +238,8 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25,<1" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0" },
+    { name = "starlette", specifier = "<2" },
+    { name = "uvicorn", specifier = "<1" },
 ]
 provides-extras = ["dev"]
 

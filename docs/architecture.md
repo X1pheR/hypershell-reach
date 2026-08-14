@@ -83,14 +83,14 @@ HATS consumes configured filesystem sources. It does not own their Git, rsync or
 
 ## Optional web UI
 
-A future HATS web UI should remain part of the same product repository, release and image rather than becoming a separate product by default. The MCP and UI are separate runtime roles:
+HATS includes an optional Web UI in the same product repository and release rather than as a separate product. The MCP and UI are separate runtime roles:
 
 ```text
 hats-mcp   # STDIO MCP entrypoint, for example as an MCP gateway child
 hats-ui    # optional HTTP entrypoint in a separate long-running container/process
 ```
 
-The first UI should be read-only and reuse the HATS domain models and configured state. Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
+The first UI is read-only and reuses the HATS domain models and configured state through explicit read-only store access. It does not reconcile Runs, perform retention cleanup, mutate Tasks or project remote Hermes state. Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
 
 ## Execution boundary
 

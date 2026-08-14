@@ -174,6 +174,23 @@ def test_list_tasks_excludes_archive_by_default(tmp_path) -> None:
     assert [record.id for record in store.list(status="active")] == [active.id]
 
 
+def test_read_only_task_store_lists_without_writing(tmp_path) -> None:
+    tasks = tmp_path / "tasks"
+    trash = tmp_path / "trash"
+    writable = TaskStore(tasks, trash)
+    record = writable.create(title="Example", objective="Do work")
+    before = (tasks / record.id / "task.yaml").read_bytes()
+
+    read_only = TaskStore(tasks, trash, read_only=True)
+
+    assert [item.id for item in read_only.list()] == [record.id]
+    assert (tasks / record.id / "task.yaml").read_bytes() == before
+    with pytest.raises(RuntimeError, match="read-only"):
+        read_only.create(title="Nope", objective="No write")
+    with pytest.raises(RuntimeError, match="read-only"):
+        read_only.cleanup()
+
+
 def test_archived_retention_removes_only_old_unretained_tasks(tmp_path) -> None:
     clock = Clock(datetime(2026, 8, 1, tzinfo=timezone.utc))
     store = TaskStore(tmp_path / "tasks", tmp_path / "trash", archived_days=180, now=clock)

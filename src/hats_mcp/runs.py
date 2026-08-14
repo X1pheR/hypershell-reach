@@ -97,19 +97,27 @@ class RunStore:
         *,
         completed_days: int | None = None,
         now: Callable[[], datetime] = utc_now,
+        read_only: bool = False,
     ) -> None:
         self.root = Path(root)
         self.completed_days = completed_days
         self._now = now
-        self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
-        self.reconcile_incomplete()
+        self.read_only = read_only
+        if not self.read_only:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
+            self.reconcile_incomplete()
 
     def _path(self, run_id: str) -> Path:
         if not _RUN_ID.fullmatch(run_id):
             raise ValueError("invalid run ID")
         return self.root / f"{run_id}.json"
 
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise RuntimeError("run store is read-only")
+
     def _atomic_write(self, record: RunRecord) -> None:
+        self._require_writable()
         path = self._path(record.id)
         temporary = self.root / f".{record.id}.{uuid4().hex}.tmp"
         payload = json.dumps(record.model_dump(), indent=2, sort_keys=True) + "\n"
@@ -253,6 +261,7 @@ class RunStore:
         return updated
 
     def reconcile_incomplete(self) -> int:
+        self._require_writable()
         reconciled = 0
         for path in sorted(self.root.glob("run-*.json")):
             if not path.is_file():
@@ -264,6 +273,7 @@ class RunStore:
         return reconciled
 
     def cleanup(self) -> list[str]:
+        self._require_writable()
         if self.completed_days is None:
             return []
         cutoff = self._now() - timedelta(days=self.completed_days)

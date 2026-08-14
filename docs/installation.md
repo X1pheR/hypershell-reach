@@ -18,13 +18,20 @@ Example after the release assets have been obtained locally:
 
 ```bash
 sha256sum --check SHA256SUMS --ignore-missing
-uv tool install ./homelab_agent_tooling_skills_mcp-0.1.0-py3-none-any.whl
+uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
 ```
 
-The installed command is:
+The base install provides the STDIO command:
 
 ```bash
 hats-mcp
+```
+
+The same wheel also installs the optional Web UI runtime:
+
+```bash
+uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
+hats-ui --host 127.0.0.1 --port 8080
 ```
 
 Validate configuration and local prerequisites before connecting an MCP client:

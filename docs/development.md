@@ -11,7 +11,7 @@ uv sync --extra dev
 ## Tests
 
 ```bash
-uv run --extra dev pytest
+uv run --frozen --extra dev pytest
 ```
 
 ## Repository structure
@@ -26,10 +26,12 @@ uv run --extra dev pytest
 │   ├── config.py
 │   ├── execution.py
 │   ├── managed_tools.py
+│   ├── read_model.py
 │   ├── runs.py
 │   ├── server.py
 │   ├── skills.py
 │   ├── tasks.py
+│   ├── ui.py
 │   └── validation.py
 └── tests/
 ```

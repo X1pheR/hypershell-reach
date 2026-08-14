@@ -107,13 +107,16 @@ class TaskStore:
         *,
         archived_days: int | None = None,
         now: Callable[[], datetime] = utc_now,
+        read_only: bool = False,
     ) -> None:
         self.tasks_root = Path(tasks_root)
         self.trash_root = Path(trash_root)
         self.archived_days = archived_days
         self._now = now
-        self.tasks_root.mkdir(parents=True, exist_ok=True, mode=0o750)
-        self.trash_root.mkdir(parents=True, exist_ok=True, mode=0o750)
+        self.read_only = read_only
+        if not self.read_only:
+            self.tasks_root.mkdir(parents=True, exist_ok=True, mode=0o750)
+            self.trash_root.mkdir(parents=True, exist_ok=True, mode=0o750)
 
     def _validate_task_id(self, task_id: str) -> None:
         if not _TASK_ID.fullmatch(task_id):
@@ -130,7 +133,12 @@ class TaskStore:
     def _record_path(self, directory: Path) -> Path:
         return directory / "task.yaml"
 
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise RuntimeError("task store is read-only")
+
     def _atomic_write(self, directory: Path, record: TaskRecord) -> None:
+        self._require_writable()
         if directory.is_symlink():
             raise RuntimeError("task directory must not be a symlink")
         directory.mkdir(parents=True, exist_ok=True, mode=0o750)
@@ -182,6 +190,7 @@ class TaskStore:
         continuity: TaskContinuity | None = None,
         retained: bool = False,
     ) -> TaskRecord:
+        self._require_writable()
         now = self._now()
         record = TaskRecord(
             id=new_task_id(now),
@@ -264,6 +273,7 @@ class TaskStore:
         continuity: TaskContinuity | None = None,
         retained: bool | None = None,
     ) -> TaskRecord:
+        self._require_writable()
         directory = self._current_dir(task_id)
         if self._archived_dir(task_id).exists():
             raise ValueError(f"task is archived: {task_id}")
@@ -299,6 +309,7 @@ class TaskStore:
         return updated
 
     def archive(self, task_id: str) -> TaskRecord:
+        self._require_writable()
         current = self._current_dir(task_id)
         archived = self._archived_dir(task_id)
         if archived.is_dir() and not current.exists():
@@ -326,6 +337,7 @@ class TaskStore:
         return self._read_dir(archived)
 
     def cleanup(self) -> list[str]:
+        self._require_writable()
         if self.archived_days is None:
             return []
         cutoff = self._now() - timedelta(days=self.archived_days)
