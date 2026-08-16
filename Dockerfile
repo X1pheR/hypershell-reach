@@ -2,6 +2,7 @@ FROM ghcr.io/astral-sh/uv@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa26
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY docs ./docs
 COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 

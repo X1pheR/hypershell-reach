@@ -90,7 +90,9 @@ hats-mcp   # STDIO MCP entrypoint, for example as an MCP gateway child
 hats-ui    # optional HTTP entrypoint in a separate long-running container/process
 ```
 
-The first UI is read-only and reuses the HATS domain models and configured state through explicit read-only store access. It does not reconcile Runs, perform retention cleanup, mutate Tasks or project remote Hermes state. Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
+The UI is read-only and reuses the HATS domain models and configured state through explicit read-only store access. It does not reconcile Runs, perform retention cleanup, mutate Tasks or project remote Hermes state. Its browser surface combines operational views with a user guide and curated technical documentation rendered from the repository Markdown packaged in the same release. Tooling candidates are presented inside the Tooling product area rather than as a separate primary destination.
+
+Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
 
 ## Execution boundary
 

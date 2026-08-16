@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
+  "markdown-it-py>=4,<5",
   "mcp>=1.1.0,<2.0",
   "pydantic>=2.10.0,<3.0",
   "pyyaml>=6.0.2,<7.0",
@@ -29,6 +30,9 @@ hats-ui = "hats_mcp.ui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hats_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "hats_mcp/_docs"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

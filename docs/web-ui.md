@@ -4,22 +4,41 @@ HATS includes an optional read-only HTTP runtime named `hats-ui`. It is delivere
 
 ## Purpose
 
-The first UI provides operational visibility without becoming another HATS writer. It exposes server-rendered views for:
+The Web UI provides browser-based visibility into HATS without becoming another writer for HATS state. Its primary destinations are:
 
+- Overview;
 - Targets;
-- Managed tooling;
+- Tooling;
 - Runs;
 - Tasks;
 - Skills;
-- Tooling Candidates.
+- Documentation.
+
+Tooling contains both registered managed tools and reviewed tooling candidates. Documentation separates a plain-language user guide from curated technical documentation.
 
 The UI reuses the existing HATS configuration, domain models and file-backed stores. `RunStore` and `TaskStore` are opened in explicit read-only mode, so the UI does not reconcile runs, perform retention cleanup, create tasks or update persisted state.
+
+## Documentation model
+
+The user guide is maintained in [`user-guide.md`](user-guide.md).
+
+Technical pages are rendered from the existing repository Markdown files. They are packaged into the release wheel and container image rather than copied into a second HTML documentation set. This keeps architecture, security, installation, configuration, operations, skills, tools, development and release guidance under one source of truth.
+
+Markdown is rendered with raw HTML disabled. Only an explicit curated list of repository documents is addressable through the technical documentation routes.
 
 ## Information boundary
 
 The UI renders only bounded summaries. It does not render target connection addresses, SSH users, credential paths, credential values, managed-script source code, run command text, run output content or full task-continuity evidence.
 
 Hermes skill content can be scanned from a configured read-only filesystem source. The UI does not perform SSH calls to project Hermes' live effective enable/disable state. `hats-mcp` remains the authority for the live effective skill catalog.
+
+## Application shell
+
+The maintained UI uses a compact top application bar with the HATS identity, centered primary destinations and a visible read-only utility state. Smaller viewports replace the desktop destinations with one off-canvas navigation dialog using the same information architecture.
+
+Pages use bounded content regions, native tables for repeated data and page-local documentation navigation. Status meaning is written as text and is never conveyed only through color.
+
+The shell includes a skip link, visible keyboard focus, reduced-motion handling, forced-colors fallbacks and responsive layouts that keep horizontal overflow inside intentionally scrollable data regions.
 
 ## Runtime
 
@@ -41,7 +60,7 @@ The repository Dockerfile packages the UI role and listens on container port `80
 
 ## HTTP surface
 
-The UI serves only read-oriented routes:
+The UI serves read-oriented routes:
 
 - `/`
 - `/targets`
@@ -49,7 +68,10 @@ The UI serves only read-oriented routes:
 - `/runs`
 - `/tasks`
 - `/skills`
-- `/candidates`
+- `/docs`
+- `/docs/technical/{slug}` for curated technical pages
 - `/healthz`
 
-HTML responses disable caching and send defensive content, framing and referrer headers. Mutating HTTP methods are not implemented.
+`/candidates` remains a compatibility redirect to the Tooling candidates section.
+
+The UI also serves its local stylesheet and navigation script under `/assets/`. HTML responses disable caching and use a restrictive Content Security Policy that permits only same-origin stylesheet and script assets. Mutating HTTP methods are not implemented.

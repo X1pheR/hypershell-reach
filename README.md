@@ -17,7 +17,7 @@ flowchart LR
     HATS --> Skills[Skill sources]
 ```
 
-The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata, task continuity, progressive read-only Agent Skills discovery and an optional read-only tooling-candidate view.
+The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata, task continuity, progressive read-only Agent Skills discovery, tooling-candidate visibility and an optional read-only Web UI with integrated documentation.
 
 ## Design
 
@@ -109,6 +109,12 @@ HATS currently exposes:
 Skill content remains read-only and never becomes executable tooling automatically.
 
 See [Tool contracts](docs/tools.md), [Skills](docs/skills.md) and the optional [MCPJungle example](docs/mcpjungle.md).
+
+## Web UI
+
+The optional `hats-ui` runtime provides a read-only browser view for Overview, Targets, Tooling, Runs, Tasks, Skills and Documentation. Tooling combines managed tools with reviewed tooling candidates. Documentation includes a plain-language [User guide](docs/user-guide.md) and renders the maintained technical Markdown from this repository inside the UI.
+
+The browser role does not add execution or state-mutation capability. See [Web UI](docs/web-ui.md) for the runtime, information and HTTP boundaries.
 
 ## Security
 
