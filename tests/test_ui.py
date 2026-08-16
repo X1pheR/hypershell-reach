@@ -234,3 +234,44 @@ def test_html_and_assets_use_defensive_headers_without_inline_script_policy(tmp_
     assert "#ff2093" in mark.text
     assert "#3c6cfe" in mark.text
     assert "#67e8f9" in mark.text
+
+
+def test_skills_view_distinguishes_unavailable_source_from_empty(tmp_path, monkeypatch) -> None:
+    client = _client(tmp_path)
+
+    def unavailable(*_args, **_kwargs):
+        raise PermissionError("source cannot be read")
+
+    monkeypatch.setattr("hats_mcp.read_model.inspect_skill_source", unavailable)
+    response = client.get("/skills")
+
+    assert response.status_code == 200
+    assert "Skill source unavailable" in response.text
+    assert "local" in response.text
+    assert "No entries." not in response.text
+
+
+def test_overview_surfaces_glanceable_live_state(tmp_path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "1/1 enabled" in response.text
+    assert "1 managed tool" in response.text
+    assert "1 recent run" in response.text
+    assert "1 active task" in response.text
+    assert "1 skill" in response.text
+    assert "1 tooling candidate" in response.text
+
+
+def test_documentation_uses_collapsible_mobile_navigation(tmp_path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/docs")
+
+    assert response.status_code == 200
+    assert 'class="docs-navigation docs-navigation-mobile"' in response.text
+    assert "<summary>Documentation menu</summary>" in response.text
+    css = client.get("/assets/app.css").text
+    assert ".docs-navigation-mobile" in css

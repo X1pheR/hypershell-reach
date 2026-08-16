@@ -155,6 +155,30 @@ def _safe_table(loader: Callable[[], list[dict[str, Any]]], columns: Sequence[tu
     return _table(columns, rows)
 
 
+def _count_label(count: int, singular: str, plural: str | None = None) -> str:
+    word = singular if count == 1 else (plural or f"{singular}s")
+    return f"{count} {word}"
+
+
+def _overview_card(
+    title: str,
+    href: str,
+    metric: str,
+    description: str,
+    *,
+    detail: str | None = None,
+    state: str = "neutral",
+) -> str:
+    detail_html = f'<span class="overview-detail">{escape(detail)}</span>' if detail else ""
+    return (
+        f'<a class="destination-card state-{escape(state)}" href="{href}">'
+        f'<h2>{escape(title)}</h2>'
+        f'<strong class="overview-metric">{escape(metric)}</strong>'
+        f'<p>{escape(description)}</p>'
+        f'{detail_html}<span class="card-link">Open {escape(title.lower())} →</span></a>'
+    )
+
+
 def _panel(title: str, description: str, content: str, *, element_id: str | None = None) -> str:
     identifier = f' id="{escape(element_id)}"' if element_id else ""
     return (
@@ -179,7 +203,13 @@ def _docs_navigation(active_page: DocumentationPage) -> str:
             current = ' aria-current="page"' if page.slug == active_page.slug else ""
             parts.append(f'<a href="{page.route}"{current}>{escape(page.title)}</a>')
         parts.append("</div>")
-    return f'<aside class="docs-navigation"><nav aria-label="Documentation sections">{"".join(parts)}</nav></aside>'
+    navigation = f'<nav aria-label="Documentation sections">{"".join(parts)}</nav>'
+    return (
+        f'<aside class="docs-navigation docs-navigation-desktop">{navigation}</aside>'
+        '<details class="docs-navigation docs-navigation-mobile">'
+        '<summary>Documentation menu</summary>'
+        f'{navigation}</details>'
+    )
 
 
 def _docs_toc(items: Sequence[TocItem]) -> str:
@@ -208,20 +238,117 @@ def create_app(config: HATSConfig) -> Starlette:
     model = HATSReadModel(config)
 
     def home(_: Request) -> Response:
-        cards = "".join(
-            f'<a class="destination-card" href="{href}"><h2>{escape(label)}</h2><p>{escape(description)}</p><span class="card-link">Open {escape(label.lower())} →</span></a>'
-            for label, href, description in (
-                ("Targets", "/targets", "Configured execution targets and their safe capabilities."),
-                ("Tooling", "/tooling", "Managed tools and reviewed reusable-tooling candidates."),
-                ("Runs", "/runs", "Recent execution metadata without commands or output content."),
-                ("Tasks", "/tasks", "Current task-continuity summaries without private evidence."),
-                ("Skills", "/skills", "Configured read-only Agent Skill content."),
-                ("Documentation", "/docs", "User guidance and maintained technical documentation."),
+        try:
+            target_rows = model.targets()
+            enabled_targets = sum(1 for row in target_rows if row.get("enabled"))
+            targets_card = _overview_card(
+                "Targets",
+                "/targets",
+                f"{enabled_targets}/{len(target_rows)} enabled",
+                "Systems HATS can connect to and what they support.",
             )
+        except (OSError, RuntimeError, ValueError):
+            targets_card = _overview_card(
+                "Targets", "/targets", "Unavailable", "Target information could not be read.", state="error"
+            )
+
+        try:
+            tool_rows = model.tooling()
+            tool_metric = _count_label(len(tool_rows), "managed tool")
+        except (OSError, RuntimeError, ValueError):
+            tool_rows = []
+            tool_metric = "Unavailable"
+        try:
+            candidates_configured, candidate_rows = model.candidates()
+            candidate_detail = (
+                _count_label(len(candidate_rows), "tooling candidate")
+                if candidates_configured
+                else "No candidate registry configured"
+            )
+        except (OSError, RuntimeError, ValueError):
+            candidate_detail = "Tooling candidates unavailable"
+        tooling_card = _overview_card(
+            "Tooling",
+            "/tooling",
+            tool_metric,
+            "Reusable tools and gaps being considered for automation.",
+            detail=candidate_detail,
+            state="error" if tool_metric == "Unavailable" else "neutral",
         )
+
+        try:
+            run_rows = model.run_summaries()
+            failed_runs = sum(1 for row in run_rows if _status_class(str(row.get("status") or "")) == "error")
+            running_runs = sum(1 for row in run_rows if str(row.get("status") or "").lower() == "running")
+            run_detail_parts = []
+            if running_runs:
+                run_detail_parts.append(_count_label(running_runs, "running"))
+            if failed_runs:
+                run_detail_parts.append(_count_label(failed_runs, "failed run"))
+            runs_card = _overview_card(
+                "Runs",
+                "/runs",
+                _count_label(len(run_rows), "recent run"),
+                "Recent HATS activity and outcomes.",
+                detail=" · ".join(run_detail_parts) or "No failures in the visible history",
+                state="warning" if running_runs or failed_runs else "neutral",
+            )
+        except (OSError, RuntimeError, ValueError):
+            runs_card = _overview_card(
+                "Runs", "/runs", "Unavailable", "Recent run information could not be read.", state="error"
+            )
+
+        try:
+            task_rows = model.task_summaries()
+            active_tasks = sum(1 for row in task_rows if str(row.get("status") or "").lower() != "completed")
+            completed_tasks = len(task_rows) - active_tasks
+            tasks_card = _overview_card(
+                "Tasks",
+                "/tasks",
+                _count_label(active_tasks, "active task"),
+                "Continuity records for work that may span sessions.",
+                detail=_count_label(completed_tasks, "completed task"),
+            )
+        except (OSError, RuntimeError, ValueError):
+            tasks_card = _overview_card(
+                "Tasks", "/tasks", "Unavailable", "Task information could not be read.", state="error"
+            )
+
+        try:
+            skill_rows, skill_reports = model.skills()
+            unavailable_sources = [report for report in skill_reports if not report.get("available", False)]
+            if unavailable_sources:
+                skills_card = _overview_card(
+                    "Skills",
+                    "/skills",
+                    "Unavailable",
+                    "One or more configured skill sources cannot be read.",
+                    detail=_count_label(len(unavailable_sources), "unavailable source"),
+                    state="error",
+                )
+            else:
+                skills_card = _overview_card(
+                    "Skills",
+                    "/skills",
+                    _count_label(len(skill_rows), "skill"),
+                    "Shared Agent Skills HATS can read.",
+                    detail=_count_label(len(skill_reports), "configured source"),
+                )
+        except (OSError, RuntimeError, ValueError):
+            skills_card = _overview_card(
+                "Skills", "/skills", "Unavailable", "Skill information could not be read.", state="error"
+            )
+
+        docs_card = _overview_card(
+            "Documentation",
+            "/docs",
+            "User guide + technical docs",
+            "How to use, configure and maintain HATS.",
+        )
+        cards = "".join((targets_card, tooling_card, runs_card, tasks_card, skills_card, docs_card))
         return _page(
             "Overview",
-            "Read-only visibility into HATS configuration, operational state and documentation.",
+            "See what HATS can access, what ran recently and where to find details.",
             f'<div class="overview-grid">{cards}</div>',
             active="/",
         )
@@ -241,8 +368,8 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         return _page(
             "Targets",
-            "Execution targets and safe capabilities. Connection and credential fields are intentionally omitted.",
-            _panel("Configured targets", "The targets HATS can address through its bounded execution layer.", content),
+            "Systems HATS can connect to and what they support. Connection details and credentials stay hidden.",
+            _panel("Configured targets", "Configured systems available to HATS.", content),
             active="/targets",
         )
 
@@ -279,15 +406,15 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         content = '<div class="section-stack">' + _panel(
             "Managed tools",
-            "Registered tools and execution metadata. Source code and filesystem paths are not rendered.",
+            "Reviewed tools HATS can run. Source code and deployment paths stay hidden.",
             managed,
         ) + _panel(
             "Tooling candidates",
-            "Deployment-reviewed gaps that may justify promotion into reusable managed tooling.",
+            "Recurring gaps that may justify reusable automation.",
             _candidates_content(),
             element_id="candidates",
         ) + "</div>"
-        return _page("Tooling", "Inspect maintained tooling and the candidate pipeline in one product area.", content, active="/tooling")
+        return _page("Tooling", "See reusable tools and gaps being considered for automation.", content, active="/tooling")
 
     def runs(_: Request) -> Response:
         content = _safe_table(
@@ -307,8 +434,8 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         return _page(
             "Runs",
-            "Recent execution records. Commands, arguments and output content are not persisted or rendered here.",
-            _panel("Execution history", "Bounded run metadata retained by HATS.", content),
+            "Recent HATS activity. Command text, arguments and output are not stored here.",
+            _panel("Recent activity", "The latest HATS run records.", content),
             active="/runs",
         )
 
@@ -325,8 +452,8 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         return _page(
             "Tasks",
-            "Current task-continuity summaries. Full continuity evidence is intentionally not rendered.",
-            _panel("Continuity state", "Current bounded HATS task records.", content),
+            "Work continuity records that may span sessions. Detailed private context stays hidden.",
+            _panel("Task records", "Current HATS task summaries.", content),
             active="/tasks",
         )
 
@@ -336,27 +463,41 @@ def create_app(config: HATSConfig) -> Starlette:
         except (OSError, RuntimeError, ValueError):
             content = '<div class="notice error" role="alert">Skills are temporarily unavailable.</div>'
         else:
-            content_only = [report["id"] for report in reports if report.get("state") == "content-only"]
-            notice = ""
-            if content_only:
-                notice = (
-                    '<div class="notice">Hermes activation state is intentionally not projected by hats-ui. '
-                    'This view shows configured skill content; hats-mcp remains authoritative for the live effective catalog.</div>'
+            unavailable = [report["id"] for report in reports if not report.get("available", False)]
+            content_only = [
+                report["id"]
+                for report in reports
+                if report.get("available", False) and report.get("state") == "content-only"
+            ]
+            notices: list[str] = []
+            if unavailable:
+                source_names = ", ".join(escape(str(source_id)) for source_id in unavailable)
+                notices.append(
+                    '<div class="notice error" role="alert"><strong>Skill source unavailable.</strong> '
+                    f'Could not read: {source_names}.</div>'
                 )
-            content = notice + _table(
-                (
-                    ("source", "Source"),
-                    ("name", "Name"),
-                    ("description", "Description"),
-                    ("category", "Category"),
-                    ("provenance", "Provenance"),
-                ),
-                rows,
-            )
+            if content_only:
+                notices.append(
+                    '<div class="notice">This page shows the skill content HATS can read. '
+                    'Use the HATS skill catalog when current agent activation matters.</div>'
+                )
+            table = ""
+            if rows or not unavailable:
+                table = _table(
+                    (
+                        ("source", "Source"),
+                        ("name", "Name"),
+                        ("description", "Description"),
+                        ("category", "Category"),
+                        ("provenance", "Origin"),
+                    ),
+                    rows,
+                )
+            content = "".join(notices) + table
         return _page(
             "Skills",
-            "Configured read-only Agent Skill content.",
-            _panel("Skill sources", "Discoverable skill content from configured read-only sources.", content),
+            "Agent Skills available from configured sources.",
+            _panel("Available skills", "Skills HATS can read from configured sources.", content),
             active="/skills",
         )
 
@@ -367,7 +508,7 @@ def create_app(config: HATSConfig) -> Starlette:
             content = '<div class="notice error" role="alert">Documentation is temporarily unavailable.</div>'
         return _page(
             "User guide",
-            "Learn what HATS shows, how to read each view and where the read-only boundary applies.",
+            "Learn what HATS shows, how to use each view and what the Web UI deliberately keeps hidden.",
             content,
             active="/docs",
         )

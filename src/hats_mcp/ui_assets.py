@@ -166,8 +166,12 @@ h3 { margin: 0; font-size: 1rem; }
 .destination-card::before, .panel-accent::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; background: var(--structural-cyan); }
 .destination-card:hover { border-color: var(--active-border); background: var(--surface-raised); }
 .destination-card h2 { margin-bottom: .45rem; color: var(--structural-cyan); }
-.destination-card p { margin: 0; color: var(--muted); }
+.destination-card p { margin: .35rem 0 0; color: var(--muted); }
 .destination-card .card-link { display: inline-block; margin-top: 1rem; color: var(--accent-strong); font-size: .86rem; font-weight: 700; }
+.overview-metric { display: block; color: var(--heading); font-size: 1.22rem; line-height: 1.25; }
+.overview-detail { display: block; margin-top: .5rem; color: var(--muted); font-size: .8rem; }
+.destination-card.state-warning::before { background: var(--warning); }
+.destination-card.state-error::before { background: var(--danger); }
 
 .section-stack { display: grid; gap: 1rem; }
 .panel { position: relative; padding: 1.15rem; }
@@ -196,6 +200,9 @@ code { font-size: .86em; }
 
 .docs-layout { display: grid; grid-template-columns: 15.5rem minmax(0, 1fr) 14rem; gap: 1rem; align-items: start; }
 .docs-navigation, .docs-toc { position: sticky; top: 5.65rem; padding: .9rem; }
+.docs-navigation-mobile { display: none; }
+.docs-navigation-mobile summary { cursor: pointer; color: var(--heading); font-weight: 700; }
+.docs-navigation-mobile[open] summary { margin-bottom: .8rem; padding-bottom: .7rem; border-bottom: 1px solid var(--border-soft); }
 .docs-nav-title { margin: 0 0 .55rem; color: var(--structural-pink); font-size: .76rem; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; }
 .docs-nav-title:not(:first-child) { margin-top: 1rem; }
 .docs-nav-links { display: grid; gap: .18rem; }
@@ -252,7 +259,8 @@ code { font-size: .86em; }
   .page-heading-row { margin-bottom: 1rem; }
   .overview-grid, .docs-layout { grid-template-columns: 1fr; }
   .destination-card { min-height: 0; }
-  .docs-navigation { position: static; }
+  .docs-navigation-desktop { display: none; }
+  .docs-navigation-mobile { display: block; position: static; }
   .docs-article { grid-row: 2; }
   .table-wrap { overscroll-behavior-inline: contain; }
 }

@@ -124,3 +124,26 @@ def test_registry_ignores_entry_templates_inside_fenced_code(tmp_path) -> None:
     candidates = ToolingRegistry(path).candidates()
 
     assert [entry.id for entry in candidates] == ["ATR-022"]
+
+
+def test_registry_accepts_automated_promotion_as_non_candidate(tmp_path) -> None:
+    path = tmp_path / "tooling-registry.md"
+    path.write_text(
+        """### ATR-033 — Automated helper
+- **Status:** automated
+- **Promotion:** automated
+- **Promotion reason:** The helper is implemented and live.
+- **Helper candidate or implementation:** github.repository-lifecycle.
+
+### ATR-034 — Remaining candidate
+- **Status:** guarded
+- **Promotion:** candidate
+- **Promotion reason:** Repeated and deterministic.
+- **Helper candidate or implementation:** example.helper.
+""",
+        encoding="utf-8",
+    )
+
+    candidates = ToolingRegistry(path).candidates()
+
+    assert [entry.id for entry in candidates] == ["ATR-034"]

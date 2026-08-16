@@ -2,19 +2,19 @@
 
 ## What HATS is
 
-HATS stands for **Homelab Agent Tooling & Skills**. It gives agents a small, controlled set of homelab capabilities: configured execution targets, managed tools, execution records, task continuity and shared Agent Skills.
+HATS stands for **Homelab Agent Tooling & Skills**. It gives agents controlled access to homelab systems, reusable tools, run history, cross-session task state and shared Agent Skills.
 
-The Web UI is a **read-only companion** to the MCP service. Use it to understand what HATS knows and what recent HATS activity looks like. The UI does not authorize or start remote actions, edit configuration, create tasks or change retained state.
+The Web UI is a **read-only companion** to the MCP service. Use it to see what HATS knows and what happened recently. The UI does not authorize or start remote actions, edit configuration, create tasks or change retained state.
 
 ## Overview
 
-The Overview is the starting point for the read-only product areas. It links to Targets, Tooling, Runs, Tasks, Skills and Documentation.
+The Overview is the starting point. It summarizes configured Targets, managed Tooling, recent Runs, active Tasks and available Skills, and links to each detailed view. It also links to Documentation.
 
-Use the Overview when you want to orient yourself before inspecting a specific part of HATS.
+Use it to spot unavailable sources or recent failures before opening a detailed view.
 
 ## Targets
 
-Targets are the configured systems that HATS can address through its bounded execution layer.
+Targets are the configured systems HATS can connect to through its controlled execution path.
 
 The Targets view shows safe metadata such as:
 
@@ -32,19 +32,19 @@ Tooling contains two related sections.
 
 ### Managed tools
 
-Managed tools are registered, reviewed tools that HATS can expose through its managed-tool execution path. The UI shows their public metadata, including purpose, source, domain, interpreter, requirements and mutation/idempotency classification.
+Managed tools are registered, reviewed actions that HATS can run through its managed-tool path. The UI shows their safe metadata, including purpose, source, domain, interpreter, requirements, whether they can change state and whether repeated execution is expected to be safe.
 
 The UI does not display tool source code or deployment filesystem paths.
 
 ### Tooling candidates
 
-Tooling candidates are recurring gaps that have been explicitly recorded for possible promotion into reusable tooling. A candidate is **not** automatically an executable tool. It still needs normal review and implementation before it can become part of the managed-tool surface.
+Tooling candidates are recurring gaps recorded for possible reusable automation. A candidate is **not** automatically an executable tool. It still needs normal review and implementation before it can become a managed tool.
 
-Keeping candidates beside Managed tools makes the lifecycle visible without making the candidate registry a separate product area.
+Keeping candidates beside Managed tools shows what may be automated next without creating a separate product area.
 
 ## Runs
 
-A Run is bounded execution evidence created by HATS. The Runs view helps answer questions such as:
+A Run is the stored summary of one HATS execution attempt. The Runs view helps answer questions such as:
 
 - what operation was attempted;
 - which configured target it used;
@@ -57,15 +57,15 @@ HATS does not persist command bodies, argument values or command output in the R
 
 ## Tasks
 
-A Task is durable continuity state for substantial or interruption-prone work. It is not a project-management system and it does not grant permission to perform changes.
+A Task keeps continuity for substantial work that may span sessions or be interrupted. It is not a project-management system and it does not grant permission to perform changes.
 
-The Tasks view intentionally shows only bounded summaries: task ID, title, state, update time and retention state. Full continuity evidence can contain operational context that does not belong in the browser UI.
+The Tasks view intentionally shows only task ID, title, state, update time and retention state. Detailed task evidence can contain operational context that does not belong in the browser UI.
 
 ## Skills
 
 Skills are read-only Agent Skill packages that help agents follow reusable workflows and conventions.
 
-The Skills view shows configured skill content and provenance. For sources that need a live adapter to determine effective enablement, the browser view may show content without claiming that the skill is currently active. The `hats-mcp` skill tools remain authoritative for the live effective catalog.
+The Skills view shows configured skill content and where it came from. For sources that need a live adapter to determine effective enablement, the browser may show readable content without claiming that the skill is currently active. The `hats-mcp` skill tools remain authoritative for the live effective catalog.
 
 ## Documentation
 
@@ -113,11 +113,11 @@ No. Deployment-owned YAML and related desired state remain the configuration aut
 
 ### Why can I not see a target address or credential path?
 
-Those fields are intentionally outside the browser information boundary. The UI only needs enough metadata to identify the target and understand its safe capabilities.
+Those fields are intentionally hidden from the browser. The UI only needs enough information to identify the target and show what it supports.
 
 ### Why does a skill appear here when it may not be active in an agent?
 
-Some skill sources can be inspected as files without projecting their live effective enable/disable state. The MCP skill catalog is authoritative when live effective state matters.
+Some skill sources can be read as files without knowing their current effective enable/disable state. The MCP skill catalog is authoritative when live activation matters.
 
 ### Where do I find installation or configuration details?
 

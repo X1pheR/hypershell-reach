@@ -7,12 +7,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 ToolingStatus = Literal["observed", "guarded", "automated", "retired"]
-PromotionState = Literal["candidate", "blocked", "not-warranted", "implemented"]
+PromotionState = Literal["candidate", "blocked", "not-warranted", "implemented", "automated"]
 
 _HEADING = re.compile(r"^### (?P<id>[A-Z][A-Z0-9-]{1,63}) — (?P<title>\S.*)$")
 _FIELD = re.compile(r"^- \*\*(?P<name>[^*]+):\*\*\s*(?P<value>.*)$")
 _VALID_STATUSES = {"observed", "guarded", "automated", "retired"}
-_VALID_PROMOTIONS = {"candidate", "blocked", "not-warranted", "implemented"}
+_VALID_PROMOTIONS = {"candidate", "blocked", "not-warranted", "implemented", "automated"}
 
 
 class ToolingCandidate(BaseModel):
