@@ -275,3 +275,20 @@ def test_documentation_uses_collapsible_mobile_navigation(tmp_path) -> None:
     assert "<summary>Documentation menu</summary>" in response.text
     css = client.get("/assets/app.css").text
     assert ".docs-navigation-mobile" in css
+
+
+def test_overview_uses_lightweight_summaries_instead_of_full_detail_loaders(tmp_path, monkeypatch) -> None:
+    client = _client(tmp_path)
+
+    def detail_loader_used(*_args, **_kwargs):
+        raise RuntimeError("detail loader should not be used by overview")
+
+    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.run_summaries", detail_loader_used)
+    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.skills", detail_loader_used)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "1 recent run" in response.text
+    assert "1 skill" in response.text
+    assert "Unavailable" not in response.text

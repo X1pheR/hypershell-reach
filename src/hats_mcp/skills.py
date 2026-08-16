@@ -413,6 +413,26 @@ def _scan_source(
     return packages, report
 
 
+def inspect_skill_source_summary(source: SkillSource) -> dict[str, object]:
+    """Return cheap local content availability/count without parsing package metadata."""
+
+    root = Path(source.path)
+    if not root.exists():
+        raise ValueError(f"skill source does not exist: {source.id}")
+    if not root.is_dir():
+        raise ValueError(f"skill source is not a directory: {source.id}")
+    if root.is_symlink():
+        raise ValueError(f"skill source root must not be a symlink: {source.id}")
+    root = root.resolve()
+    return {
+        "id": source.id,
+        "type": source.type,
+        "available": True,
+        "state": "content-only" if source.type == "hermes" else "configured",
+        "count": len(_iter_skill_files(root, hermes=source.type == "hermes")),
+    }
+
+
 def inspect_skill_source(source: SkillSource) -> tuple[list[SkillPackage], dict[str, object]]:
     """Validate one local skill content source without making network calls.
 

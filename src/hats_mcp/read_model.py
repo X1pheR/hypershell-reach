@@ -5,7 +5,7 @@ from typing import Any
 from .config import HATSConfig
 from .managed_tools import load_tool_registry
 from .runs import RunStore
-from .skills import inspect_skill_source
+from .skills import inspect_skill_source, inspect_skill_source_summary
 from .tasks import TaskStore
 from .tooling_registry import ToolingRegistry
 
@@ -36,8 +36,22 @@ class HATSReadModel:
     def run_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return [record.summary() for record in self.runs.list(limit=limit)]
 
+    def recent_run_summaries(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        return [record.summary() for record in self.runs.recent(limit=limit)]
+
     def task_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
         return [record.summary() for record in self.tasks.list(limit=limit)]
+
+    def skill_source_summaries(self) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
+        for source in self.config.sources.skills:
+            if not source.enabled:
+                continue
+            try:
+                reports.append(inspect_skill_source_summary(source))
+            except (OSError, RuntimeError, ValueError):
+                reports.append({"id": source.id, "type": source.type, "available": False, "count": 0})
+        return reports
 
     def skills(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         skills: list[dict[str, Any]] = []

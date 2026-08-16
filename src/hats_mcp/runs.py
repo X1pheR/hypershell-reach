@@ -196,6 +196,16 @@ class RunStore:
         records.sort(key=lambda record: (record.started_at, record.id), reverse=True)
         return records[:limit]
 
+    def recent(self, *, limit: int = 20) -> list[RunRecord]:
+        if limit < 1 or limit > 100:
+            raise ValueError("recent run limit must be between 1 and 100")
+        paths = sorted(
+            (path for path in self.root.glob("run-*.json") if path.is_file()),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        return [self._read_path(path) for path in paths[:limit]]
+
     def finish(self, run_id: str, execution: dict[str, Any]) -> RunRecord:
         record = self.get(run_id)
         if record.status != "running":

@@ -277,7 +277,7 @@ def create_app(config: HATSConfig) -> Starlette:
         )
 
         try:
-            run_rows = model.run_summaries()
+            run_rows = model.recent_run_summaries()
             failed_runs = sum(1 for row in run_rows if _status_class(str(row.get("status") or "")) == "error")
             running_runs = sum(1 for row in run_rows if str(row.get("status") or "").lower() == "running")
             run_detail_parts = []
@@ -315,7 +315,7 @@ def create_app(config: HATSConfig) -> Starlette:
             )
 
         try:
-            skill_rows, skill_reports = model.skills()
+            skill_reports = model.skill_source_summaries()
             unavailable_sources = [report for report in skill_reports if not report.get("available", False)]
             if unavailable_sources:
                 skills_card = _overview_card(
@@ -327,10 +327,11 @@ def create_app(config: HATSConfig) -> Starlette:
                     state="error",
                 )
             else:
+                skill_count = sum(int(report.get("count") or 0) for report in skill_reports)
                 skills_card = _overview_card(
                     "Skills",
                     "/skills",
-                    _count_label(len(skill_rows), "skill"),
+                    _count_label(skill_count, "skill"),
                     "Shared Agent Skills HATS can read.",
                     detail=_count_label(len(skill_reports), "configured source"),
                 )
