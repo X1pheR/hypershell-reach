@@ -10,9 +10,11 @@ HATS uses Semantic Versioning. While the project is on `0.x`, minor versions may
    ```bash
    package_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
    revision=$(git rev-parse HEAD)
+   created=$(date -u -d "@$(git show -s --format=%ct HEAD)" +%Y-%m-%dT%H:%M:%SZ)
    docker build \
      --build-arg "HATS_VERSION=${package_version}" \
      --build-arg "HATS_REVISION=${revision}" \
+     --build-arg "HATS_CREATED=${created}" \
      -t hats-ui:release-candidate .
    ```
 
