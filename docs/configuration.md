@@ -120,11 +120,13 @@ sources:
       os_platform: linux
       state:
         target: hermes
-        python_executable: /usr/bin/python3
+        python_executable: /opt/hermes-agent/venv/bin/python
         config_path: /home/operator/.hermes/config.yaml
         repo_path: /opt/hermes-agent
         consumer_platform: cli
 ```
+
+Use the Python interpreter from the deployed Hermes runtime environment rather than an unrelated system interpreter. The projector imports Hermes' current skill loader, so matching the runtime interpreter avoids false missing-dependency or plugin-import failures.
 
 Skill IDs are source-qualified, so the same bare skill name can exist in different sources without shadowing. Within one source a duplicate bare skill name is rejected.
 

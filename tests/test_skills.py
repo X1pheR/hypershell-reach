@@ -46,7 +46,23 @@ def test_catalog_description_matches_hermes_cap(tmp_path) -> None:
 
     assert len(skill.description) == 1024
     assert skill.description.endswith("...")
+    assert len(skill.catalog_summary()["description"]) == 200
+    assert skill.catalog_summary()["description"].endswith("...")
+    assert skill.summary()["description"] == skill.description
     assert set(skill.catalog_summary()) == {"id", "name", "description", "category"}
+
+
+def test_catalog_revision_changes_with_catalog_content(tmp_path) -> None:
+    _skill(tmp_path, "one", name="one")
+    source = SkillSource(id="local", path=str(tmp_path))
+    first = build_skill_registry([source]).catalog_revision()
+
+    _skill(tmp_path, "two", name="two")
+    second = build_skill_registry([source]).catalog_revision()
+
+    assert len(first) == 64
+    assert len(second) == 64
+    assert first != second
 
 def test_platform_and_environment_filtering_for_filesystem_source(tmp_path) -> None:
     _skill(tmp_path, "mac", name="mac", extra="platforms: [macos]\n")

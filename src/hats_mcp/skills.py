@@ -37,6 +37,7 @@ MAX_SKILL_FILE_BYTES = 1_048_576
 MAX_SUPPORT_FILE_BYTES = 16_777_216
 MAX_READ_BYTES = 131_072
 MAX_DESCRIPTION_LENGTH = 1024
+MAX_CATALOG_DESCRIPTION_LENGTH = 200
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -74,16 +75,22 @@ class SkillPackage:
         return f"{self.source_id}:{self.name}"
 
     def catalog_summary(self) -> dict[str, object]:
+        description = self.description
+        if len(description) > MAX_CATALOG_DESCRIPTION_LENGTH:
+            description = description[: MAX_CATALOG_DESCRIPTION_LENGTH - 3] + "..."
         return {
             "id": self.id,
             "name": self.name,
-            "description": self.description,
+            "description": description,
             "category": self.category,
         }
 
     def summary(self) -> dict[str, object]:
         return {
-            **self.catalog_summary(),
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "category": self.category,
             "source": self.source_id,
             "source_type": self.source_type,
             "provenance": self.provenance,
@@ -116,6 +123,11 @@ class SkillRegistry:
         if require_effective and not skill.effective:
             raise ValueError(f"skill is not active: {skill_id}")
         return skill
+
+    def catalog_revision(self) -> str:
+        payload = [skill.catalog_summary() for skill in self.list()]
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
