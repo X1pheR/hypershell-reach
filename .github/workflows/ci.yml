@@ -31,8 +31,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install Chromium
-        run: uv run --frozen --extra dev playwright install --with-deps chromium
       - name: Prepare runner-local browser fixture
         run: |
           root="${RUNNER_TEMP}/hats-browser"
@@ -92,9 +90,6 @@ jobs:
                 known_hosts_file: /run/secrets/unused_known_hosts
           YAML
       - name: Run Chromium browser acceptance
-        env:
-          RUN_BROWSER_TESTS: "1"
-          HATS_BROWSER_BASE_URL: http://127.0.0.1:18081
         run: |
           set -euo pipefail
           root="${RUNNER_TEMP}/hats-browser"
@@ -115,11 +110,16 @@ jobs:
             fi
             sleep 1
           done
-          uv run --frozen --extra dev pytest -q tests/test_browser.py \
-            --browser=chromium \
-            --tracing=retain-on-failure \
-            --screenshot=only-on-failure \
-            --output=test-results/browser
+          docker run --rm --network host \
+            -e RUN_BROWSER_TESTS=1 \
+            -e HATS_BROWSER_BASE_URL=http://127.0.0.1:18081 \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e PYTEST_ADDOPTS='-p no:cacheprovider' \
+            -v "${GITHUB_WORKSPACE}:/src:ro" \
+            -v "${GITHUB_WORKSPACE}/test-results/browser:/test-results/browser" \
+            -w /src \
+            mcr.microsoft.com/playwright/python@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d \
+            bash -lc 'python -m pip install --disable-pip-version-check -q "pytest==8.4.2" "pytest-asyncio==0.26.0" "pytest-playwright==0.9.0" && pytest -q tests/test_browser.py --browser=chromium --tracing=retain-on-failure --screenshot=only-on-failure --output=/test-results/browser'
       - name: Upload browser failure evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
