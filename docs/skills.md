@@ -10,9 +10,9 @@ skill_get(skill_id)
 skill_read_file(skill_id, relative_path, offset, max_bytes)
 ```
 
-`skills_catalog` is the tier-1 discovery surface. It returns only effective skills using the same progressive-disclosure shape as Hermes: source-qualified ID, name, description and category, plus the category list and total count. Descriptions are capped at 1024 characters with an ellipsis when truncated. `skill_get` loads one bounded first chunk of `SKILL.md`. `skill_read_file` reads supporting files in bounded byte ranges.
+`skills_catalog` is the tier-1 discovery surface. It returns only effective skills using the same progressive-disclosure shape as Hermes: source-qualified ID, name, compact description and category, plus the category list, total count and a deterministic `catalog_revision`. Catalog descriptions are capped at 200 characters with an ellipsis when truncated; `skill_get` retains the full validated description and loads up to 128 KiB of `SKILL.md` by default. `skill_read_file` reads supporting files in bounded byte ranges.
 
-The catalog is live state, not a synchronized copy. It has no catalog version: each call rebuilds the configured source view and Hermes sources query current effective Hermes state.
+The catalog remains derived from live configured state rather than a synchronized copy. The stateful MCP runtime caches the complete effective registry for 60 seconds so a normal `skills_catalog` followed by one or more `skill_get` or `skill_read_file` calls does not repeat the Hermes projection and complete source scan. Set `refresh=true` on a Skills call after a known add, remove, edit or enable/disable change when immediate freshness is required. A refresh rebuilds the fail-closed registry before returning.
 
 Source-qualified IDs avoid cross-source ambiguity:
 
@@ -39,7 +39,7 @@ sources:
       os_platform: linux
       state:
         target: hermes
-        python_executable: /usr/bin/python3
+        python_executable: /opt/hermes-agent/venv/bin/python
         config_path: /home/operator/.hermes/config.yaml
         repo_path: /opt/hermes-agent
         consumer_platform: cli
@@ -66,7 +66,7 @@ The state projector is shipped by HATS and streamed over the existing bounded SS
 - configured external skill directory entries;
 - the effective skill names returned by Hermes' own current `skills_list` implementation.
 
-It does not return other Hermes configuration fields or secret values. The projection is queried on each Skills MCP call; no manual synchronization or HATS restart is required after ordinary add, remove, edit or enable/disable changes.
+It does not return other Hermes configuration fields or secret values. The projection is queried when the 60-second effective-registry cache is cold or when a caller explicitly requests `refresh=true`. No manual synchronization or HATS restart is required after ordinary add, remove, edit or enable/disable changes.
 
 HATS fails closed when Hermes reports an effective skill whose content is not present in the configured HATS content source. This prevents silent drift when a future external or plugin-provided skill becomes active before HATS has a readable content source for it.
 
@@ -84,7 +84,7 @@ A script inside a skill package remains read-only skill content. It is never reg
 
 ## Content retrieval
 
-A consumer should load `skills_catalog` once at the start of a new agent conversation so the model is aware of available skills, then call `skill_get` only for skills relevant to the current work.
+A consumer should load `skills_catalog` once at the start of a new agent conversation so the model is aware of available skills, then call `skill_get` only for skills relevant to the current work. Reuse an already-loaded catalog and skill content within the same conversation while its revision is still current; do not reload a skill merely because another user turn arrived.
 
 `skill_get` returns:
 

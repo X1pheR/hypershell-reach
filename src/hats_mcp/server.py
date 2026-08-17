@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import traceback
 from collections.abc import Sequence
 from typing import Any, Literal
@@ -13,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
-from .skills import HermesState, build_skill_registry, list_skill_files, read_skill_file
+from .skills import HermesState, SkillRegistry, build_skill_registry, list_skill_files, read_skill_file
 from .runs import RunOperation, RunStatus, RunStore
 from .tasks import TaskContinuity, TaskStatus, TaskStore
 from .tooling_registry import ToolingRegistry
@@ -22,17 +23,29 @@ app = Server("hats")
 _config: HATSConfig
 _run_store_instance: RunStore | None = None
 _task_store_instance: TaskStore | None = None
+_skill_registry_cache: SkillRegistry | None = None
+_skill_registry_cache_at = 0.0
+_skill_registry_cache_config: HATSConfig | None = None
+_skill_registry_lock = asyncio.Lock()
+SKILL_REGISTRY_CACHE_TTL_SECONDS = 60.0
 
 
 class EmptyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SkillCatalogInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refresh: bool = False
+
+
 class SkillGetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     skill_id: str = Field(min_length=3, max_length=190)
-    max_bytes: int = Field(default=32_768, ge=1, le=131_072)
+    max_bytes: int = Field(default=131_072, ge=1, le=131_072)
+    refresh: bool = False
 
 
 class SkillReadFileInput(BaseModel):
@@ -42,6 +55,7 @@ class SkillReadFileInput(BaseModel):
     relative_path: str = Field(min_length=1, max_length=4_096)
     offset: int = Field(default=0, ge=0)
     max_bytes: int = Field(default=65_536, ge=1, le=131_072)
+    refresh: bool = False
 
 
 class CommandInput(BaseModel):
@@ -294,12 +308,41 @@ async def _hermes_state(source) -> HermesState:
     )
 
 
-async def _skill_registry():
+async def _build_skill_registry() -> SkillRegistry:
     states: dict[str, HermesState] = {}
     for source in _config.sources.skills:
         if source.enabled and source.type == "hermes":
             states[source.id] = await _hermes_state(source)
     return build_skill_registry(_config.sources.skills, states)
+
+
+async def _skill_registry(*, refresh: bool = False) -> SkillRegistry:
+    global _skill_registry_cache, _skill_registry_cache_at, _skill_registry_cache_config
+
+    config = _config
+    now = time.monotonic()
+    if (
+        not refresh
+        and _skill_registry_cache is not None
+        and _skill_registry_cache_config is config
+        and now - _skill_registry_cache_at < SKILL_REGISTRY_CACHE_TTL_SECONDS
+    ):
+        return _skill_registry_cache
+
+    async with _skill_registry_lock:
+        now = time.monotonic()
+        if (
+            not refresh
+            and _skill_registry_cache is not None
+            and _skill_registry_cache_config is config
+            and now - _skill_registry_cache_at < SKILL_REGISTRY_CACHE_TTL_SECONDS
+        ):
+            return _skill_registry_cache
+        registry = await _build_skill_registry()
+        _skill_registry_cache = registry
+        _skill_registry_cache_at = time.monotonic()
+        _skill_registry_cache_config = config
+        return registry
 
 
 @app.list_tools()
@@ -308,11 +351,11 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="skills_catalog",
             description=(
-                "Return compact metadata for configured Agent Skills. Hermes sources use a "
-                "live read-only state projection so the default catalog follows Hermes' "
-                "effective skill set."
+                "Return compact metadata for configured Agent Skills. A short-lived cached "
+                "effective registry avoids repeated source scans; set refresh=true after a "
+                "known skill-state change."
             ),
-            inputSchema=EmptyInput.model_json_schema(),
+            inputSchema=SkillCatalogInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=True,
                 destructiveHint=False,
@@ -566,18 +609,22 @@ async def call_tool(
 
     try:
         if name == "skills_catalog":
-            EmptyInput(**arguments)
-            registry = await _skill_registry()
+            args = SkillCatalogInput(**arguments)
+            registry = await _skill_registry(refresh=args.refresh)
             skills = registry.list()
             result = {
                 "skills": [skill.catalog_summary() for skill in skills],
                 "categories": sorted({skill.category for skill in skills if skill.category}),
                 "count": len(skills),
-                "hint": "Use skill_get(skill_id) to load full content and supporting-file metadata.",
+                "catalog_revision": registry.catalog_revision(),
+                "hint": (
+                    "Use skill_get(skill_id) for full skill content. Reuse this catalog within "
+                    "the conversation; use refresh=true only after a known skill-state change."
+                ),
             }
         elif name == "skill_get":
             args = SkillGetInput(**arguments)
-            registry = await _skill_registry()
+            registry = await _skill_registry(refresh=args.refresh)
             skill = registry.get(args.skill_id)
             content = read_skill_file(skill, "SKILL.md", offset=0, max_bytes=args.max_bytes)
             result = {
@@ -592,7 +639,7 @@ async def call_tool(
             }
         elif name == "skill_read_file":
             args = SkillReadFileInput(**arguments)
-            registry = await _skill_registry()
+            registry = await _skill_registry(refresh=args.refresh)
             skill = registry.get(args.skill_id)
             result = read_skill_file(
                 skill,
@@ -786,7 +833,11 @@ async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
     global _config, _run_store_instance, _task_store_instance
+    global _skill_registry_cache, _skill_registry_cache_at, _skill_registry_cache_config
     _config = load_config()
+    _skill_registry_cache = None
+    _skill_registry_cache_at = 0.0
+    _skill_registry_cache_config = None
     _run_store_instance = RunStore(
         _config.workspace.runs,
         completed_days=_config.retention.runs.completed_days,
