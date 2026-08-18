@@ -12,11 +12,11 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Validate tag and package version
@@ -28,6 +28,8 @@ jobs:
           test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "${GITHUB_SHA}"
       - name: Test exact tag
         run: uv run --frozen --extra dev pytest
+      - name: Run runner-local browser acceptance
+        run: bash scripts/ci-browser.sh
       - name: Build reproducible release artifacts
         shell: bash
         run: |

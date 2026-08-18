@@ -144,7 +144,7 @@ def _table(columns: Sequence[tuple[str, str]], rows: Sequence[dict[str, Any]]) -
         "<tr>" + "".join(f"<td>{_value(key, row.get(key))}</td>" for key, _ in columns) + "</tr>"
         for row in rows
     )
-    return f'<div class="data-region"><div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></div>'
+    return f'<div class="data-region"><div class="table-wrap" tabindex="0"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></div>'
 
 
 def _safe_table(loader: Callable[[], list[dict[str, Any]]], columns: Sequence[tuple[str, str]]) -> str:
