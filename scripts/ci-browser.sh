@@ -109,8 +109,8 @@ docker run --rm --init --ipc=host --network host \
   "${PLAYWRIGHT_IMAGE}" \
   bash -lc 'python -m pip install --disable-pip-version-check -q \
     "playwright==1.62.0" \
-    "pytest==8.4.2" \
-    "pytest-asyncio==0.26.0" \
+    "pytest==9.1.1" \
+    "pytest-asyncio==1.4.0" \
     "pytest-playwright==0.9.0" \
     "axe-playwright-python==0.1.8" && \
     pytest -q tests/test_browser.py --browser=chromium \
