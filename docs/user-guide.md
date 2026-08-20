@@ -67,12 +67,12 @@ Skills are read-only Agent Skill packages that help agents follow reusable workf
 
 The Skills view shows configured skill content and where it came from. For sources that need a live adapter to determine effective enablement, the browser may show readable content without claiming that the skill is currently active. The `hats-mcp` skill tools remain authoritative for the live effective catalog.
 
-## Documentation
+## Help
 
-Documentation has two layers:
+Help has two layers:
 
 - **User guide** — explains the product in plain language and how to interpret the Web UI;
-- **Technical documentation** — the maintained repository documentation for architecture, security, installation, configuration, operations, tools, skills, development and releases.
+- **Technical reference** — the maintained repository documentation for architecture, security, installation, configuration, operations, tools, skills, development and releases.
 
 The technical pages shown in the UI are rendered from the same Markdown files maintained in the repository. They are not a second copied documentation set.
 
@@ -121,4 +121,4 @@ Some skill sources can be read as files without knowing their current effective 
 
 ### Where do I find installation or configuration details?
 
-Open **Documentation → Technical documentation** and select Installation or Configuration.
+Open **Help → Technical reference** and select Installation or Configuration.

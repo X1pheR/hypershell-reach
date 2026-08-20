@@ -62,7 +62,9 @@ def test_hats_browser_desktop_shell(page: Page) -> None:
     navigation = page.get_by_role("navigation", name="Primary navigation")
     expect(navigation).to_be_visible()
     expect(navigation.get_by_role("link", name="Targets", exact=True)).to_be_visible()
+    expect(page.get_by_text("Runtime available", exact=True).first).to_be_visible()
     expect(page.get_by_text("Read-only", exact=True).first).to_be_visible()
+    expect(page.get_by_role("link", name="Help", exact=True).first).to_have_attribute("href", "/help")
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
     _assert_wcag_a_aa(page)
@@ -103,5 +105,33 @@ def test_hats_browser_mobile_navigation(page: Page) -> None:
     expect(page.get_by_role("heading", name="Targets", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 
+    _assert_wcag_a_aa(page)
+    _assert_clean_browser(errors)
+
+
+def test_help_is_utility_destination_and_growing_tables_expose_discovery_controls(page: Page) -> None:
+    errors = _observe_page(page)
+    page.goto(f"{BASE_URL}/tooling", wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Tooling", exact=True)).to_be_visible()
+    expect(page.get_by_role("searchbox", name="Search").first).to_be_visible()
+    expect(page.get_by_role("combobox", name="Domain")).to_be_visible()
+    expect(page.locator("table.data-table").first).to_be_visible()
+
+    help_link = page.get_by_role("link", name="Help", exact=True).first
+    help_link.click()
+    expect(page).to_have_url(f"{BASE_URL}/help")
+    expect(page.get_by_role("heading", name="Help", exact=True, level=1)).to_be_visible()
+    _assert_wcag_a_aa(page)
+    _assert_clean_browser(errors)
+
+
+def test_growing_table_reflows_as_semantic_records_on_mobile(page: Page) -> None:
+    errors = _observe_page(page)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{BASE_URL}/tooling", wait_until="networkidle")
+    first_cell = page.locator("table.data-table tbody td").first
+    expect(first_cell).to_be_visible()
+    assert first_cell.evaluate("node => getComputedStyle(node).display") == "grid"
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     _assert_wcag_a_aa(page)
     _assert_clean_browser(errors)
