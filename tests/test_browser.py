@@ -69,6 +69,19 @@ def test_hats_browser_desktop_shell(page: Page) -> None:
     _assert_clean_browser(errors)
 
 
+@pytest.mark.parametrize("width,height", [(320, 800), (360, 800), (390, 844)])
+def test_family_mobile_reflow_has_no_page_level_horizontal_overflow(page: Page, width: int, height: int) -> None:
+    errors = _observe_page(page)
+    page.set_viewport_size({"width": width, "height": height})
+    page.goto(BASE_URL, wait_until="networkidle")
+
+    expect(page.get_by_role("button", name="Open navigation")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+
+    _assert_wcag_a_aa(page)
+    _assert_clean_browser(errors)
+
+
 def test_hats_browser_mobile_navigation(page: Page) -> None:
     errors = _observe_page(page)
     page.set_viewport_size({"width": 390, "height": 844})
