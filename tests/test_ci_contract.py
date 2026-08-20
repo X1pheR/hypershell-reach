@@ -17,6 +17,12 @@ def test_github_actions_are_pinned_to_full_commit_shas() -> None:
             assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", value), value
 
 
+def test_release_write_permission_is_job_scoped() -> None:
+    assert "permissions:\n  contents: read" in RELEASE
+    release_job = RELEASE.split("  release:\n", 1)[1]
+    assert "    permissions:\n      contents: write" in release_job
+
+
 def test_browser_gate_is_reused_by_ci_and_release() -> None:
     invocation = "bash scripts/ci-browser.sh"
     assert invocation in CI
