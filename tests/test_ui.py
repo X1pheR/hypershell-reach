@@ -99,9 +99,11 @@ def test_ui_exposes_canonical_application_shell_and_primary_navigation(tmp_path)
     home = client.get("/")
     assert home.status_code == 200
     navigation = _primary_navigation(home.text)
-    for label in ("Overview", "Targets", "Tooling", "Runs", "Tasks", "Skills", "Documentation"):
+    for label in ("Overview", "Targets", "Tooling", "Runs", "Tasks", "Skills"):
         assert f">{label}</a>" in navigation
+    assert ">Documentation</a>" not in navigation
     assert "Tooling Candidates" not in navigation
+    assert 'href="/help" aria-label="Help"' in home.text
     assert 'class="skip-link" href="#main-content"' in home.text
     assert 'id="main-content" tabindex="-1"' in home.text
     assert 'id="mobile-menu-toggle"' in home.text
@@ -131,28 +133,34 @@ def test_tooling_groups_managed_tools_and_candidates(tmp_path) -> None:
     assert compatibility.headers["location"] == "/tooling#candidates"
 
 
-def test_documentation_exposes_user_and_curated_technical_docs(tmp_path) -> None:
+def test_help_exposes_user_and_curated_technical_reference_with_docs_compatibility(tmp_path) -> None:
     client = _client(tmp_path)
 
-    user_guide = client.get("/docs")
+    user_guide = client.get("/help")
     assert user_guide.status_code == 200
-    assert "User guide" in user_guide.text
-    assert "Technical documentation" in user_guide.text
+    assert "Help" in user_guide.text
+    assert "Technical reference" in user_guide.text
     assert "What HATS is" in user_guide.text
     assert "Managed tools" in user_guide.text
     assert "Tooling candidates" in user_guide.text
 
-    architecture = client.get("/docs/technical/architecture")
+    architecture = client.get("/help/technical/architecture")
     assert architecture.status_code == 200
     assert "Architecture" in architecture.text
     assert "Overview" in architecture.text
     assert "On this page" in architecture.text
 
-    configuration = client.get("/docs/technical/configuration")
+    configuration = client.get("/help/technical/configuration")
     assert configuration.status_code == 200
-    assert 'href="/docs/technical/skills"' in configuration.text
+    assert 'href="/help/technical/skills"' in configuration.text
 
-    assert client.get("/docs/technical/not-a-document").status_code == 404
+    assert client.get("/help/technical/not-a-document").status_code == 404
+    docs = client.get("/docs", follow_redirects=False)
+    assert docs.status_code in {302, 307, 308}
+    assert docs.headers["location"] == "/help"
+    technical = client.get("/docs/technical/skills", follow_redirects=False)
+    assert technical.status_code in {302, 307, 308}
+    assert technical.headers["location"] == "/help/technical/skills"
     assert client.post("/docs").status_code == 405
 
 
@@ -268,11 +276,11 @@ def test_overview_surfaces_glanceable_live_state(tmp_path) -> None:
 def test_documentation_uses_collapsible_mobile_navigation(tmp_path) -> None:
     client = _client(tmp_path)
 
-    response = client.get("/docs")
+    response = client.get("/help")
 
     assert response.status_code == 200
     assert 'class="docs-navigation docs-navigation-mobile"' in response.text
-    assert "<summary>Documentation menu</summary>" in response.text
+    assert "<summary>Help menu</summary>" in response.text
     css = client.get("/assets/app.css").text
     assert ".docs-navigation-mobile" in css
 
@@ -292,3 +300,65 @@ def test_overview_uses_lightweight_summaries_instead_of_full_detail_loaders(tmp_
     assert "1 recent run" in response.text
     assert "1 skill" in response.text
     assert "Unavailable" not in response.text
+
+
+def test_growing_views_use_server_rendered_discovery_controls_and_filtered_empty_state(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    run_rows = [
+        {
+            "id": f"run-{index:03d}",
+            "status": "failed" if index == 0 else "succeeded",
+            "operation": "run_command" if index % 2 == 0 else "run_script",
+            "target": "docker",
+            "started_at": f"2026-08-20T12:{index:02d}:00Z",
+            "ended_at": f"2026-08-20T12:{index:02d}:01Z",
+            "task_id": None,
+            "script_id": "system.inspect" if index % 2 else None,
+            "ambiguous": False,
+            "retained": False,
+        }
+        for index in range(30)
+    ]
+    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.run_summaries", lambda self, limit=100: run_rows)
+    client = TestClient(create_app(config))
+
+    first = client.get("/runs")
+    assert first.status_code == 200
+    assert 'class="table-controls"' in first.text
+    assert 'name="q"' in first.text
+    assert 'name="filter"' in first.text
+    assert 'aria-sort="descending"' in first.text
+    assert "30 results · showing 1–25" in first.text
+    assert "Page 1 of 2" in first.text
+
+    second = client.get("/runs?page=2")
+    assert "30 results · showing 26–30" in second.text
+    assert "Page 2 of 2" in second.text
+
+    filtered = client.get("/runs?q=run-000&filter=failed")
+    assert "1 result · showing 1–1" in filtered.text
+    assert "run-000" in filtered.text
+    assert "run-001" not in filtered.text
+
+    missing = client.get("/runs?q=does-not-exist")
+    assert "No entries match the current filters." in missing.text
+
+    skills = client.get("/skills?q=missing-skill")
+    assert 'class="table-controls"' in skills.text
+    assert "No entries match the current filters." in skills.text
+
+    tooling = client.get("/tooling?tools_q=Inspect&candidates_filter=observed")
+    assert 'name="tools_q"' in tooling.text
+    assert 'name="candidates_filter"' in tooling.text
+    assert "Inspect system" in tooling.text
+    assert "Example gap" in tooling.text
+
+
+def test_shell_separates_runtime_availability_from_read_only_mode_and_contextual_help(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.get("/runs")
+    assert response.status_code == 200
+    assert 'aria-label="Runtime availability: Available">Runtime available</span>' in response.text
+    assert 'aria-label="Mode: Read-only">Read-only</span>' in response.text
+    assert 'aria-label="About this page"' in response.text
+    assert 'href="/help/technical/runs-and-tasks"' in response.text

@@ -20,8 +20,8 @@ class DocumentationPage:
     @property
     def route(self) -> str:
         if self.slug == "user-guide":
-            return "/docs"
-        return f"/docs/technical/{self.slug}"
+            return "/help"
+        return f"/help/technical/{self.slug}"
 
 
 @dataclass(frozen=True)

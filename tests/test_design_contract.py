@@ -57,3 +57,49 @@ def test_shell_uses_family_brand_and_neutral_read_only_mode_badge() -> None:
     assert '<span class="brand-copy"><strong>Hypershell</strong><small>HATS</small></span>' in ui
     assert 'class="mode-badge" aria-label="Mode: Read-only">Read-only</span>' in ui
     assert 'utility-dot' not in ui
+
+
+def test_help_is_utility_destination_and_runtime_availability_is_not_mode() -> None:
+    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    assert '("Documentation", "/docs")' not in ui
+    assert 'href="/help"' in ui
+    assert 'aria-label="Help"' in ui
+    assert 'class="availability-badge" aria-label="Runtime availability: Available"' in ui
+    assert 'class="mode-badge" aria-label="Mode: Read-only"' in ui
+    assert 'Route("/help"' in ui
+    assert 'Route("/docs"' in ui and 'RedirectResponse("/help"' in ui
+
+
+def test_growing_read_only_tables_have_server_rendered_discovery_controls() -> None:
+    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    for marker in ("table-controls", "table-search", "table-filter", "table-pagination", "aria-sort"):
+        assert marker in ui
+    assert 'request.query_params' in ui
+    assert 'page_size=25' in ui
+    assert 'No entries match the current filters.' in ui
+    assert '<table class="data-table">' in ui
+
+
+def test_responsive_tables_preserve_values_as_semantic_mobile_records() -> None:
+    css = UI_ASSETS
+    assert '.data-table td::before' in css
+    assert 'content: attr(data-label)' in css
+    assert '.data-table tbody' in css
+    assert '.data-table tr' in css
+
+
+def test_filter_forms_preserve_strict_form_action_csp_via_same_origin_script_navigation() -> None:
+    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    assets = (ROOT / "src" / "hats_mcp" / "ui_assets.py").read_text(encoding="utf-8")
+    assert "form-action 'none'" in ui
+    assert 'document.querySelectorAll(".table-controls")' in assets
+    assert 'event.preventDefault()' in assets
+    assert 'new FormData(form)' in assets
+    assert 'window.location.assign' in assets
+    assert 'fetch(' not in assets
+
+
+def test_application_tooltips_are_edge_safe_at_narrow_widths() -> None:
+    css = UI_ASSETS
+    assert '.header-actions [data-tooltip]::after, .contextual-help[data-tooltip]::after' in css
+    assert 'max-width: min(12rem, calc(100vw - 1rem))' in css

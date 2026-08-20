@@ -68,10 +68,10 @@ The UI serves read-oriented routes:
 - `/runs`
 - `/tasks`
 - `/skills`
-- `/docs`
-- `/docs/technical/{slug}` for curated technical pages
+- `/help`
+- `/help/technical/{slug}` for curated technical reference pages
 - `/healthz`
 
-`/candidates` remains a compatibility redirect to the Tooling candidates section.
+`/docs` and `/docs/technical/{slug}` remain compatibility redirects into Help. `/candidates` remains a compatibility redirect to the Tooling candidates section.
 
 The UI also serves its local stylesheet and navigation script under `/assets/`. HTML responses disable caching and use a restrictive Content Security Policy that permits only same-origin stylesheet and script assets. Mutating HTTP methods are not implemented.

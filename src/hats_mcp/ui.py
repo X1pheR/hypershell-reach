@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from html import escape
 from typing import Any
+from urllib.parse import urlencode
 
 import uvicorn
 from starlette.applications import Starlette
@@ -23,7 +24,6 @@ _NAV = (
     ("Runs", "/runs"),
     ("Tasks", "/tasks"),
     ("Skills", "/skills"),
-    ("Documentation", "/docs"),
 )
 
 _SECURITY_HEADERS = {
@@ -64,6 +64,28 @@ def _nav_links(active: str | None) -> str:
     return "".join(items)
 
 
+_CONTEXT_HELP = {
+    "/": "/help",
+    "/targets": "/help/technical/configuration",
+    "/tooling": "/help/technical/tools",
+    "/runs": "/help/technical/runs-and-tasks",
+    "/tasks": "/help/technical/runs-and-tasks",
+    "/skills": "/help/technical/skills",
+}
+
+
+def _context_help(active: str | None) -> str:
+    href = _CONTEXT_HELP.get(active or "")
+    if not href:
+        return ""
+    return (
+        f'<a class="icon-button contextual-help" href="{href}" aria-label="About this page" '
+        'data-tooltip="About this page"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true">'
+        '<circle cx="12" cy="12" r="9"/><path d="M9.7 9a2.6 2.6 0 1 1 4.45 1.84c-.9.86-2.15 1.27-2.15 2.66"/>'
+        '<path d="M12 17h.01"/></svg></a>'
+    )
+
+
 def _page(title: str, intro: str, content: str, *, active: str | None = None) -> HTMLResponse:
     document = f"""<!doctype html>
 <html lang="en">
@@ -86,10 +108,14 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
       {_brand()}
     </div>
     <nav class="primary-navigation" aria-label="Primary navigation">{_nav_links(active)}</nav>
-    <div class="header-actions"><span class="mode-badge" aria-label="Mode: Read-only">Read-only</span></div>
+    <div class="header-actions">
+      <a class="icon-button utility-help" href="/help" aria-label="Help" data-tooltip="Help"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.7 9a2.6 2.6 0 1 1 4.45 1.84c-.9.86-2.15 1.27-2.15 2.66"/><path d="M12 17h.01"/></svg></a>
+      <span class="availability-badge" aria-label="Runtime availability: Available">Runtime available</span>
+      <span class="mode-badge" aria-label="Mode: Read-only">Read-only</span>
+    </div>
   </header>
   <main id="main-content" tabindex="-1">
-    <div class="page-heading-row"><div><h1>{escape(title)}</h1><p class="page-summary">{escape(intro)}</p></div></div>
+    <div class="page-heading-row"><div><h1>{escape(title)}</h1><p class="page-summary">{escape(intro)}</p></div>{_context_help(active)}</div>
     {content}
   </main>
   <dialog id="mobile-navigation" class="mobile-navigation-sheet" aria-labelledby="mobile-navigation-title">
@@ -100,7 +126,11 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
       </div>
       <span id="mobile-navigation-title" class="sr-only">HATS navigation</span>
       <nav class="mobile-primary-navigation" aria-label="Mobile primary navigation">{_nav_links(active)}</nav>
-      <div class="mobile-utility-navigation"><span class="mode-badge" aria-label="Mode: Read-only">Read-only</span></div>
+      <div class="mobile-utility-navigation">
+        <a class="mobile-utility-link" href="/help"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.7 9a2.6 2.6 0 1 1 4.45 1.84c-.9.86-2.15 1.27-2.15 2.66"/><path d="M12 17h.01"/></svg><span>Help</span></a>
+        <span class="availability-badge" aria-label="Runtime availability: Available">Runtime available</span>
+        <span class="mode-badge" aria-label="Mode: Read-only">Read-only</span>
+      </div>
     </div>
   </dialog>
   <script src="/assets/app.js" defer></script>
@@ -136,23 +166,168 @@ def _value(key: str, value: Any) -> str:
     return escape(str(value))
 
 
-def _table(columns: Sequence[tuple[str, str]], rows: Sequence[dict[str, Any]]) -> str:
-    if not rows:
-        return '<div class="data-region"><div class="empty">No entries.</div></div>'
-    head = "".join(f'<th scope="col">{escape(label)}</th>' for _, label in columns)
-    body = "".join(
-        "<tr>" + "".join(f"<td>{_value(key, row.get(key))}</td>" for key, _ in columns) + "</tr>"
-        for row in rows
+def _table_query(request: Request, updates: dict[str, str | int | None]) -> str:
+    params = dict(request.query_params)
+    for key, value in updates.items():
+        if value is None or value == "":
+            params.pop(key, None)
+        else:
+            params[key] = str(value)
+    query = urlencode(params)
+    return f"{request.url.path}?{query}" if query else request.url.path
+
+
+def _search_value(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return " ".join(str(item) for item in value)
+    return "" if value is None else str(value)
+
+
+def _table(
+    columns: Sequence[tuple[str, str]],
+    rows: Sequence[dict[str, Any]],
+    *,
+    request: Request | None = None,
+    prefix: str = "",
+    search_fields: Sequence[str] = (),
+    sort_fields: Sequence[str] = (),
+    filter_field: str | None = None,
+    filter_label: str = "Filter",
+    default_sort: str | None = None,
+    default_desc: bool = False,
+    page_size=25,
+) -> str:
+    source_rows = list(rows)
+    if request is None or not (search_fields or sort_fields or filter_field):
+        if not source_rows:
+            return '<div class="data-region"><div class="empty">No entries.</div></div>'
+        head = "".join(f'<th scope="col">{escape(label)}</th>' for _, label in columns)
+        body = "".join(
+            "<tr>" + "".join(
+                f'<td data-label="{escape(label)}">{_value(key, row.get(key))}</td>' for key, label in columns
+            ) + "</tr>"
+            for row in source_rows
+        )
+        return f'<div class="data-region"><div class="table-wrap" tabindex="0"><table class="data-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></div>'
+
+    name = lambda key: f"{prefix}_{key}" if prefix else key
+    query = request.query_params.get(name("q"), "").strip()
+    selected_filter = request.query_params.get(name("filter"), "").strip()
+    requested_sort = request.query_params.get(name("sort"), default_sort or "").strip()
+    sort_key = requested_sort if requested_sort in sort_fields else (default_sort if default_sort in sort_fields else "")
+    direction = request.query_params.get(name("dir"), "desc" if default_desc else "asc").lower()
+    descending = direction == "desc"
+    try:
+        page = max(1, int(request.query_params.get(name("page"), "1")))
+    except ValueError:
+        page = 1
+
+    filtered = source_rows
+    if query:
+        needle = query.casefold()
+        filtered = [
+            row for row in filtered
+            if any(needle in _search_value(row.get(field)).casefold() for field in search_fields)
+        ]
+    if filter_field and selected_filter:
+        filtered = [row for row in filtered if _search_value(row.get(filter_field)) == selected_filter]
+    if sort_key:
+        filtered.sort(
+            key=lambda row: (_search_value(row.get(sort_key)).casefold(), _search_value(row.get("id")).casefold()),
+            reverse=descending,
+        )
+
+    total = len(filtered)
+    max_page = max(1, (total + page_size - 1) // page_size)
+    page = min(page, max_page)
+    start = (page - 1) * page_size
+    visible = filtered[start:start + page_size]
+
+    controls: list[str] = ['<form class="table-controls" method="get">']
+    if search_fields:
+        controls.append(
+            f'<label class="table-search"><span>Search</span><input type="search" name="{escape(name("q"))}" '
+            f'value="{escape(query)}" placeholder="Search visible fields"></label>'
+        )
+    if filter_field:
+        options = sorted({_search_value(row.get(filter_field)) for row in source_rows if _search_value(row.get(filter_field))})
+        option_html = ['<option value="">All</option>']
+        for value in options:
+            selected = ' selected' if value == selected_filter else ''
+            option_html.append(f'<option value="{escape(value)}"{selected}>{escape(value)}</option>')
+        controls.append(
+            f'<label class="table-filter"><span>{escape(filter_label)}</span><select name="{escape(name("filter"))}">'
+            f'{"".join(option_html)}</select></label>'
+        )
+    if sort_key:
+        controls.append(f'<input type="hidden" name="{escape(name("sort"))}" value="{escape(sort_key)}">')
+        controls.append(f'<input type="hidden" name="{escape(name("dir"))}" value="{escape(direction)}">')
+    controls.append('<button class="secondary-action" type="submit">Apply</button>')
+    controls.append(f'<a class="button-link" href="{escape(request.url.path)}">Clear</a>')
+    controls.append('</form>')
+
+    head_cells: list[str] = []
+    for key, label in columns:
+        if key not in sort_fields:
+            head_cells.append(f'<th scope="col">{escape(label)}</th>')
+            continue
+        active = key == sort_key
+        next_direction = "asc" if active and descending else "desc" if active else "asc"
+        aria_sort = ("descending" if descending else "ascending") if active else "none"
+        arrow = "↓" if active and descending else "↑" if active else "↕"
+        href = _table_query(
+            request,
+            {name("sort"): key, name("dir"): next_direction, name("page"): None},
+        )
+        head_cells.append(
+            f'<th scope="col" aria-sort="{aria_sort}"><a class="sort-link" href="{escape(href)}">'
+            f'{escape(label)} <span aria-hidden="true">{arrow}</span></a></th>'
+        )
+
+    if visible:
+        body = "".join(
+            "<tr>" + "".join(
+                f'<td data-label="{escape(label)}">{_value(key, row.get(key))}</td>' for key, label in columns
+            ) + "</tr>"
+            for row in visible
+        )
+        table = (
+            f'<div class="table-wrap" tabindex="0"><table class="data-table"><thead><tr>{"".join(head_cells)}</tr></thead>'
+            f'<tbody>{body}</tbody></table></div>'
+        )
+    else:
+        empty = "No entries." if not source_rows else "No entries match the current filters."
+        table = f'<div class="empty">{empty}</div>'
+
+    context = f'{total} result' if total == 1 else f'{total} results'
+    if total:
+        context += f' · showing {start + 1}–{min(start + page_size, total)}'
+    pagination = ""
+    if max_page > 1:
+        links = []
+        if page > 1:
+            links.append(f'<a class="button-link" href="{escape(_table_query(request, {name("page"): page - 1}))}">Previous</a>')
+        links.append(f'<span>Page {page} of {max_page}</span>')
+        if page < max_page:
+            links.append(f'<a class="button-link" href="{escape(_table_query(request, {name("page"): page + 1}))}">Next</a>')
+        pagination = f'<nav class="table-pagination" aria-label="Results pages">{"".join(links)}</nav>'
+
+    return (
+        f'{"".join(controls)}<div class="data-region"><p class="result-context" role="status">{escape(context)}</p>'
+        f'{table}{pagination}</div>'
     )
-    return f'<div class="data-region"><div class="table-wrap" tabindex="0"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></div>'
 
 
-def _safe_table(loader: Callable[[], list[dict[str, Any]]], columns: Sequence[tuple[str, str]]) -> str:
+def _safe_table(
+    loader: Callable[[], list[dict[str, Any]]],
+    columns: Sequence[tuple[str, str]],
+    **table_options: Any,
+) -> str:
     try:
         rows = loader()
     except (OSError, RuntimeError, ValueError):
         return '<div class="notice error" role="alert">This view is temporarily unavailable.</div>'
-    return _table(columns, rows)
+    return _table(columns, rows, **table_options)
 
 
 def _count_label(count: int, singular: str, plural: str | None = None) -> str:
@@ -193,9 +368,9 @@ def _docs_navigation(active_page: DocumentationPage) -> str:
     parts = [
         '<p class="docs-nav-title">Guide</p>',
         '<div class="docs-nav-links">',
-        f'<a href="/docs"{guide_current}>User guide</a>',
+        f'<a href="/help"{guide_current}>User guide</a>',
         "</div>",
-        '<p class="docs-nav-title">Technical documentation</p>',
+        '<p class="docs-nav-title">Technical reference</p>',
     ]
     for group, pages in documentation_groups():
         parts.append(f'<p class="docs-nav-group">{escape(group)}</p><div class="docs-nav-links">')
@@ -203,11 +378,11 @@ def _docs_navigation(active_page: DocumentationPage) -> str:
             current = ' aria-current="page"' if page.slug == active_page.slug else ""
             parts.append(f'<a href="{page.route}"{current}>{escape(page.title)}</a>')
         parts.append("</div>")
-    navigation = f'<nav aria-label="Documentation sections">{"".join(parts)}</nav>'
+    navigation = f'<nav aria-label="Help sections">{"".join(parts)}</nav>'
     return (
         f'<aside class="docs-navigation docs-navigation-desktop">{navigation}</aside>'
         '<details class="docs-navigation docs-navigation-mobile">'
-        '<summary>Documentation menu</summary>'
+        '<summary>Help menu</summary>'
         f'{navigation}</details>'
     )
 
@@ -340,13 +515,13 @@ def create_app(config: HATSConfig) -> Starlette:
                 "Skills", "/skills", "Unavailable", "Skill information could not be read.", state="error"
             )
 
-        docs_card = _overview_card(
-            "Documentation",
-            "/docs",
-            "User guide + technical docs",
+        help_card = _overview_card(
+            "Help",
+            "/help",
+            "User guide + technical reference",
             "How to use, configure and maintain HATS.",
         )
-        cards = "".join((targets_card, tooling_card, runs_card, tasks_card, skills_card, docs_card))
+        cards = "".join((targets_card, tooling_card, runs_card, tasks_card, skills_card, help_card))
         return _page(
             "Overview",
             "See what HATS can access, what ran recently and where to find details.",
@@ -374,36 +549,50 @@ def create_app(config: HATSConfig) -> Starlette:
             active="/targets",
         )
 
-    def _candidates_content() -> str:
+    def _candidates_content(request: Request) -> str:
         try:
             configured, rows = model.candidates()
         except (OSError, RuntimeError, ValueError):
             return '<div class="notice error" role="alert">Tooling candidates are temporarily unavailable.</div>'
-        prefix = "" if configured else '<div class="notice">No tooling registry is configured.</div>'
-        return prefix + _table(
+        notice = "" if configured else '<div class="notice">No tooling registry is configured.</div>'
+        return notice + _table(
             (
-                ("id", "ID"),
                 ("title", "Title"),
                 ("status", "Status"),
                 ("promotion_reason", "Promotion reason"),
+                ("id", "ID"),
             ),
             rows,
+            request=request,
+            prefix="candidates",
+            search_fields=("title", "status", "promotion_reason", "id"),
+            sort_fields=("title", "status", "id"),
+            filter_field="status",
+            filter_label="Status",
+            default_sort="id",
         )
 
-    def tooling(_: Request) -> Response:
+    def tooling(request: Request) -> Response:
         managed = _safe_table(
             model.tooling,
             (
-                ("id", "ID"),
                 ("name", "Name"),
+                ("domain", "Domain"),
                 ("description", "Description"),
                 ("source", "Source"),
-                ("domain", "Domain"),
                 ("interpreter", "Interpreter"),
                 ("requires", "Requires"),
                 ("mutating", "Mutating"),
                 ("idempotent", "Idempotent"),
+                ("id", "ID"),
             ),
+            request=request,
+            prefix="tools",
+            search_fields=("name", "domain", "description", "source", "interpreter", "requires", "id"),
+            sort_fields=("name", "domain", "source", "interpreter", "mutating"),
+            filter_field="domain",
+            filter_label="Domain",
+            default_sort="name",
         )
         content = '<div class="section-stack">' + _panel(
             "Managed tools",
@@ -412,26 +601,33 @@ def create_app(config: HATSConfig) -> Starlette:
         ) + _panel(
             "Tooling candidates",
             "Recurring gaps that may justify reusable automation.",
-            _candidates_content(),
+            _candidates_content(request),
             element_id="candidates",
         ) + "</div>"
         return _page("Tooling", "See reusable tools and gaps being considered for automation.", content, active="/tooling")
 
-    def runs(_: Request) -> Response:
+    def runs(request: Request) -> Response:
         content = _safe_table(
             model.run_summaries,
             (
                 ("id", "Run"),
+                ("status", "Status"),
                 ("operation", "Operation"),
                 ("target", "Target"),
-                ("task_id", "Task"),
-                ("script_id", "Script"),
-                ("status", "Status"),
-                ("ambiguous", "Ambiguous"),
                 ("started_at", "Started"),
                 ("ended_at", "Ended"),
+                ("task_id", "Task"),
+                ("script_id", "Script"),
+                ("ambiguous", "Ambiguous"),
                 ("retained", "Retained"),
             ),
+            request=request,
+            search_fields=("id", "status", "operation", "target", "task_id", "script_id"),
+            sort_fields=("started_at", "status", "operation", "target", "ended_at"),
+            filter_field="status",
+            filter_label="Status",
+            default_sort="started_at",
+            default_desc=True,
         )
         return _page(
             "Runs",
@@ -458,7 +654,7 @@ def create_app(config: HATSConfig) -> Starlette:
             active="/tasks",
         )
 
-    def skills(_: Request) -> Response:
+    def skills(request: Request) -> Response:
         try:
             rows, reports = model.skills()
         except (OSError, RuntimeError, ValueError):
@@ -486,13 +682,19 @@ def create_app(config: HATSConfig) -> Starlette:
             if rows or not unavailable:
                 table = _table(
                     (
-                        ("source", "Source"),
                         ("name", "Name"),
-                        ("description", "Description"),
                         ("category", "Category"),
+                        ("source", "Source"),
+                        ("description", "Description"),
                         ("provenance", "Origin"),
                     ),
                     rows,
+                    request=request,
+                    search_fields=("name", "description", "category", "source", "provenance"),
+                    sort_fields=("name", "category", "source", "provenance"),
+                    filter_field="category",
+                    filter_label="Category",
+                    default_sort="name",
                 )
             content = "".join(notices) + table
         return _page(
@@ -502,27 +704,32 @@ def create_app(config: HATSConfig) -> Starlette:
             active="/skills",
         )
 
-    def documentation(_: Request) -> Response:
+    def help_page(_: Request) -> Response:
         try:
             content = _documentation_layout(USER_GUIDE)
         except (OSError, RuntimeError, ValueError):
-            content = '<div class="notice error" role="alert">Documentation is temporarily unavailable.</div>'
+            content = '<div class="notice error" role="alert">Help is temporarily unavailable.</div>'
         return _page(
-            "User guide",
+            "Help",
             "Learn what HATS shows, how to use each view and what the Web UI deliberately keeps hidden.",
             content,
-            active="/docs",
         )
 
-    def technical_documentation(request: Request) -> Response:
+    def technical_help(request: Request) -> Response:
         page = technical_page(request.path_params["slug"])
         if page is None:
-            return PlainTextResponse("Documentation page not found.", status_code=404, headers={"Cache-Control": "no-store"})
+            return PlainTextResponse("Help page not found.", status_code=404, headers={"Cache-Control": "no-store"})
         try:
             content = _documentation_layout(page)
         except (OSError, RuntimeError, ValueError):
-            content = '<div class="notice error" role="alert">Documentation is temporarily unavailable.</div>'
-        return _page(page.title, page.description, content, active="/docs")
+            content = '<div class="notice error" role="alert">Help is temporarily unavailable.</div>'
+        return _page(page.title, page.description, content)
+
+    def docs_compatibility(_: Request) -> Response:
+        return RedirectResponse("/help", status_code=307)
+
+    def docs_technical_compatibility(request: Request) -> Response:
+        return RedirectResponse(f'/help/technical/{request.path_params["slug"]}', status_code=307)
 
     def candidates_compatibility(_: Request) -> Response:
         return RedirectResponse("/tooling#candidates", status_code=307)
@@ -547,8 +754,10 @@ def create_app(config: HATSConfig) -> Starlette:
             Route("/runs", runs, methods=["GET"]),
             Route("/tasks", tasks, methods=["GET"]),
             Route("/skills", skills, methods=["GET"]),
-            Route("/docs", documentation, methods=["GET"]),
-            Route("/docs/technical/{slug}", technical_documentation, methods=["GET"]),
+            Route("/help", help_page, methods=["GET"]),
+            Route("/help/technical/{slug}", technical_help, methods=["GET"]),
+            Route("/docs", docs_compatibility, methods=["GET"]),
+            Route("/docs/technical/{slug}", docs_technical_compatibility, methods=["GET"]),
             Route("/candidates", candidates_compatibility, methods=["GET"]),
             Route("/assets/app.css", stylesheet, methods=["GET"]),
             Route("/assets/app.js", javascript, methods=["GET"]),

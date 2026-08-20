@@ -135,7 +135,7 @@ Use compact application-scale headings and human-readable first-layer values. Ke
 
 ## Layout
 
-Keep the compact server-rendered topbar and routeable primary destinations. At 320, 360 and 390 CSS px, desktop navigation yields to the left off-canvas navigation without page-level horizontal overflow. Documentation may retain its own bounded in-content navigation because it is a content-navigation need rather than a second application shell.
+Keep the compact server-rendered topbar and routeable primary destinations. At 320, 360 and 390 CSS px, desktop navigation yields to the left off-canvas navigation without page-level horizontal overflow. Help may retain its own bounded in-content navigation because curated repository documentation is a content-navigation need rather than a second application shell.
 
 ## Components
 
