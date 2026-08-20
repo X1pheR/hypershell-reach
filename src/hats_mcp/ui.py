@@ -51,7 +51,7 @@ def _brand() -> str:
     return """
 <a class="brand" href="/" aria-label="Open HATS overview">
   <img class="brand-mark" src="/assets/hats-mark.svg" alt="" width="44" height="44">
-  <span class="brand-copy"><strong>HATS</strong><small>Homelab Agent Tooling &amp; Skills</small></span>
+  <span class="brand-copy"><strong>Hypershell</strong><small>HATS</small></span>
 </a>
 """
 
@@ -86,7 +86,7 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
       {_brand()}
     </div>
     <nav class="primary-navigation" aria-label="Primary navigation">{_nav_links(active)}</nav>
-    <div class="header-actions"><span class="utility-pill"><span class="utility-dot" aria-hidden="true"></span>Read-only</span></div>
+    <div class="header-actions"><span class="mode-badge" aria-label="Mode: Read-only">Read-only</span></div>
   </header>
   <main id="main-content" tabindex="-1">
     <div class="page-heading-row"><div><h1>{escape(title)}</h1><p class="page-summary">{escape(intro)}</p></div></div>
@@ -100,7 +100,7 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
       </div>
       <span id="mobile-navigation-title" class="sr-only">HATS navigation</span>
       <nav class="mobile-primary-navigation" aria-label="Mobile primary navigation">{_nav_links(active)}</nav>
-      <div class="mobile-utility-navigation"><span class="utility-pill"><span class="utility-dot" aria-hidden="true"></span>Read-only</span></div>
+      <div class="mobile-utility-navigation"><span class="mode-badge" aria-label="Mode: Read-only">Read-only</span></div>
     </div>
   </dialog>
   <script src="/assets/app.js" defer></script>

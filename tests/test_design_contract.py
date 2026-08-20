@@ -50,3 +50,10 @@ def test_runtime_css_keeps_canonical_shared_core_palette() -> None:
     for token, value in CANONICAL_COLORS.items():
         css_token = css_names.get(token, token)
         assert f"--{css_token}: {value};" in UI_ASSETS
+
+
+def test_shell_uses_family_brand_and_neutral_read_only_mode_badge() -> None:
+    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    assert '<span class="brand-copy"><strong>Hypershell</strong><small>HATS</small></span>' in ui
+    assert 'class="mode-badge" aria-label="Mode: Read-only">Read-only</span>' in ui
+    assert 'utility-dot' not in ui
