@@ -97,3 +97,9 @@ def test_filter_forms_preserve_strict_form_action_csp_via_same_origin_script_nav
     assert 'new FormData(form)' in assets
     assert 'window.location.assign' in assets
     assert 'fetch(' not in assets
+
+
+def test_application_tooltips_are_edge_safe_at_narrow_widths() -> None:
+    css = UI_ASSETS
+    assert '.header-actions [data-tooltip]::after, .contextual-help[data-tooltip]::after' in css
+    assert 'max-width: min(12rem, calc(100vw - 1rem))' in css
