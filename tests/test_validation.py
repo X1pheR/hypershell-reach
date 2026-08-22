@@ -260,3 +260,17 @@ def test_validate_rejects_invalid_tooling_registry(tmp_path: Path) -> None:
     assert "Status: invalid" in report.text
     assert "unsupported promotion state" in report.text
 
+
+
+def test_validate_checks_configured_candidate_workspace(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    candidate_root = tmp_path / "workspace" / "candidates"
+    candidate_root.mkdir()
+    payload["workspace"]["candidates"] = str(candidate_root)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert f"candidates: {candidate_root} [writable]" in report.text

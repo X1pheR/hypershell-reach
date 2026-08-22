@@ -40,8 +40,20 @@ A recorded gap is a strong promotion candidate when all of these are true:
 
 Promotion remains a reviewed decision. A registry can surface candidates automatically, but it should not automatically implement every candidate.
 
-## Failure registry and candidates
+## Candidate lifecycle
 
-Use one governed failure registry rather than duplicating evidence into a second candidate registry. Candidate status is a view over recorded failures and friction that meet the promotion criteria above.
+HATS owns Candidate **state mechanics**, not source-code generation, Git workflow, or authorization policy. Candidate records are structured YAML state when `workspace.candidates` is configured; managed-tool source remains in the owning product or deployment repository.
 
-HATS exposes the optional read-only candidate view from a deployment-owned tooling registry. Candidate state is explicit registry metadata, never a prose heuristic. Future catalog/get or mutation tools should reuse the same registry contract; mutation must be typed and explicit rather than arbitrary document editing.
+A Candidate must preserve enough intent to survive chat loss: recurring problem, cause and evidence; proposed capability and optional managed-tool ID; required inputs and expected outputs; safety/mutation boundary; stable owner ID; deterministic acceptance postconditions; promotion rationale; and optional implementation Task/final capability references. Candidate state must not contain credential or secret values.
+
+The state set is intentionally small: `candidate`, `approved`, `blocked`, `not-warranted`, `implemented`, and `automated`. `approved` means an operator has explicitly authorized implementation. The existence of `approve_candidate` never grants that authorization; callers must establish it outside HATS before invoking the transition. Generic `update_candidate` cannot change lifecycle state.
+
+Every mutation uses an `expected_revision` CAS. Candidate writes are serialized by a per-Candidate interprocess lock, written to a same-directory temporary file, file-fsynced, atomically replaced, and followed by parent-directory fsync. A stale writer fails rather than silently overwriting committed state.
+
+After approval, `link_candidate_task` can reference an existing HATS Task. Completion records either `implemented` or `automated` plus one stable final `managed-tool` or `capability` reference. Managed-tool references are checked against the effective ToolRegistry before completion. HATS does not persist physical implementation paths when stable owner/tool identifiers are sufficient.
+
+## Legacy tooling-registry compatibility
+
+The optional deployment-owned Markdown tooling registry remains a read-only compatibility feed. `tooling_candidates` preserves its current consumer contract. `preview_candidate_imports` maps only facts explicitly present in that feed to `candidate-v1` drafts and reports every required target field that remains unknown. It never mutates Candidate state and never invents missing facts. Malformed legacy entries fail safe.
+
+A deployment may retire the compatibility feed only after its explicit candidates have been enriched into valid Candidate records, repository tests pass, and a separate governed deployment migration gate is reached.

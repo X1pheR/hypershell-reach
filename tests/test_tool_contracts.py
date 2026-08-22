@@ -12,6 +12,16 @@ def test_tools_have_truthful_annotations() -> None:
         "skill_get": (True, False, True, False),
         "skill_read_file": (True, False, True, False),
         "tooling_candidates": (True, False, True, False),
+        "preview_candidate_imports": (True, False, True, False),
+        "list_candidates": (True, False, True, False),
+        "get_candidate": (True, False, True, False),
+        "create_candidate": (False, False, False, False),
+        "update_candidate": (False, False, False, False),
+        "approve_candidate": (False, False, True, False),
+        "block_candidate": (False, False, True, False),
+        "mark_candidate_not_warranted": (False, False, True, False),
+        "link_candidate_task": (False, False, True, False),
+        "complete_candidate": (False, False, True, False),
         "list_targets": (True, False, True, False),
         "list_scripts": (True, False, True, False),
         "get_script": (True, False, True, False),
@@ -38,3 +48,10 @@ def test_tools_have_truthful_annotations() -> None:
             annotations.idempotentHint,
             annotations.openWorldHint,
         ) == values
+
+
+def test_candidate_approval_tool_does_not_confuse_state_mechanics_with_authorization() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(list_tools())}
+    description = tools["approve_candidate"].description.lower()
+    assert "explicit operator authorization" in description
+    assert "does not grant authorization" in description

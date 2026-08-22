@@ -9,8 +9,16 @@ from typing import Any, Literal
 
 import mcp.types as types
 from mcp.server import Server
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from .candidates import (
+    CandidateOwnership,
+    CandidateProblem,
+    CandidateProposal,
+    CandidateReference,
+    CandidateState,
+    CandidateStore,
+)
 from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
@@ -23,6 +31,7 @@ app = Server("hats")
 _config: HATSConfig
 _run_store_instance: RunStore | None = None
 _task_store_instance: TaskStore | None = None
+_candidate_store_instance: CandidateStore | None = None
 _skill_registry_cache: SkillRegistry | None = None
 _skill_registry_cache_at = 0.0
 _skill_registry_cache_config: HATSConfig | None = None
@@ -159,6 +168,91 @@ class ArchiveTaskInput(BaseModel):
     task_id: str = Field(min_length=1, max_length=128)
 
 
+class ListCandidatesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: CandidateState | None = None
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class GetCandidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+
+
+class CreateCandidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    problem: CandidateProblem
+    proposal: CandidateProposal
+    ownership: CandidateOwnership
+    promotion_rationale: str = Field(min_length=1, max_length=2_000)
+
+
+class UpdateCandidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    problem: CandidateProblem | None = None
+    proposal: CandidateProposal | None = None
+    ownership: CandidateOwnership | None = None
+    promotion_rationale: str | None = Field(default=None, min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def require_change(self) -> "UpdateCandidateInput":
+        if all(
+            value is None
+            for value in (
+                self.title,
+                self.problem,
+                self.proposal,
+                self.ownership,
+                self.promotion_rationale,
+            )
+        ):
+            raise ValueError("candidate update requires at least one content change")
+        return self
+
+
+class ApproveCandidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+    approval_rationale: str = Field(min_length=1, max_length=2_000)
+
+
+class CandidateReasonInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+    rationale: str = Field(min_length=1, max_length=2_000)
+
+
+class LinkCandidateTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+    task_id: str = Field(min_length=1, max_length=128)
+
+
+class CompleteCandidateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+    outcome: Literal["implemented", "automated"]
+    completion_rationale: str = Field(min_length=1, max_length=2_000)
+    final_reference: CandidateReference
+
+
 def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
     target = _config.enabled_target(target_id)
     max_timeout = _config.resolved_max_timeout(target)
@@ -198,6 +292,16 @@ def _task_store() -> TaskStore:
         )
         _task_store_instance.cleanup()
     return _task_store_instance
+
+
+def _candidate_store() -> CandidateStore:
+    global _candidate_store_instance
+    path = _config.workspace.candidates
+    if path is None:
+        raise ValueError("candidate store is not configured")
+    if _candidate_store_instance is None or _candidate_store_instance.root != __import__("pathlib").Path(path):
+        _candidate_store_instance = CandidateStore(path)
+    return _candidate_store_instance
 
 
 async def _tracked_ssh_run(
@@ -405,6 +509,72 @@ async def list_tools() -> list[types.Tool]:
                 idempotentHint=True,
                 openWorldHint=False,
             ),
+        ),
+        types.Tool(
+            name="preview_candidate_imports",
+            description=(
+                "Preview how explicit legacy tooling-registry candidates map to Candidate v1. "
+                "Missing required facts are reported and no Candidate state is mutated."
+            ),
+            inputSchema=EmptyInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="list_candidates",
+            description="List HATS-owned structured Candidate records when Candidate storage is configured.",
+            inputSchema=ListCandidatesInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="get_candidate",
+            description="Return one HATS-owned structured Candidate record.",
+            inputSchema=GetCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="create_candidate",
+            description="Create one structured Candidate proposal. This records a proposal and does not authorize implementation.",
+            inputSchema=CreateCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+        ),
+        types.Tool(
+            name="update_candidate",
+            description="Update Candidate proposal content using expected-revision CAS. Lifecycle state cannot be changed through this operation.",
+            inputSchema=UpdateCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+        ),
+        types.Tool(
+            name="approve_candidate",
+            description=(
+                "Mark a Candidate approved only after explicit operator authorization to build. "
+                "This call implements state mechanics; tool availability does not grant authorization."
+            ),
+            inputSchema=ApproveCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="block_candidate",
+            description="Mark a Candidate blocked with a preserved rationale using expected-revision CAS.",
+            inputSchema=CandidateReasonInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="mark_candidate_not_warranted",
+            description="Mark a Candidate not-warranted with a preserved rationale using expected-revision CAS.",
+            inputSchema=CandidateReasonInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="link_candidate_task",
+            description="Link an approved Candidate to an existing HATS implementation Task using stable IDs only.",
+            inputSchema=LinkCandidateTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+        ),
+        types.Tool(
+            name="complete_candidate",
+            description="Mark an approved Candidate implemented or automated and persist its final managed-tool or capability reference.",
+            inputSchema=CompleteCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
         ),
         types.Tool(
             name="list_targets",
@@ -659,6 +829,98 @@ async def call_tool(
                     "candidates": [candidate.summary() for candidate in candidates],
                     "count": len(candidates),
                 }
+        elif name == "preview_candidate_imports":
+            EmptyInput(**arguments)
+            source = _config.sources.tooling_registry
+            if source is None or not source.enabled:
+                result = {
+                    "configured": False,
+                    "source_schema": "tooling-registry-v1",
+                    "target_schema": "candidate-v1",
+                    "drafts": [],
+                    "count": 0,
+                }
+            else:
+                drafts = ToolingRegistry(source.path).candidate_import_drafts()
+                result = {
+                    "configured": True,
+                    "source_schema": "tooling-registry-v1",
+                    "target_schema": "candidate-v1",
+                    "drafts": [draft.model_dump(mode="json") for draft in drafts],
+                    "count": len(drafts),
+                }
+        elif name == "list_candidates":
+            args = ListCandidatesInput(**arguments)
+            if _config.workspace.candidates is None:
+                result = {"configured": False, "candidates": [], "count": 0}
+            else:
+                candidates = _candidate_store().list(state=args.state, limit=args.limit)
+                result = {
+                    "configured": True,
+                    "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+                    "count": len(candidates),
+                }
+        elif name == "get_candidate":
+            args = GetCandidateInput(**arguments)
+            result = _candidate_store().get(args.candidate_id).model_dump(mode="json")
+        elif name == "create_candidate":
+            args = CreateCandidateInput(**arguments)
+            result = _candidate_store().create(
+                candidate_id=args.candidate_id,
+                title=args.title,
+                problem=args.problem,
+                proposal=args.proposal,
+                ownership=args.ownership,
+                promotion_rationale=args.promotion_rationale,
+            ).model_dump(mode="json")
+        elif name == "update_candidate":
+            args = UpdateCandidateInput(**arguments)
+            result = _candidate_store().update(
+                args.candidate_id,
+                expected_revision=args.expected_revision,
+                title=args.title,
+                problem=args.problem,
+                proposal=args.proposal,
+                ownership=args.ownership,
+                promotion_rationale=args.promotion_rationale,
+            ).model_dump(mode="json")
+        elif name == "approve_candidate":
+            args = ApproveCandidateInput(**arguments)
+            result = _candidate_store().transition(
+                args.candidate_id,
+                expected_revision=args.expected_revision,
+                target_state="approved",
+                state_reason=args.approval_rationale,
+            ).model_dump(mode="json")
+        elif name == "block_candidate":
+            args = CandidateReasonInput(**arguments)
+            result = _candidate_store().transition(
+                args.candidate_id, expected_revision=args.expected_revision,
+                target_state="blocked", state_reason=args.rationale,
+            ).model_dump(mode="json")
+        elif name == "mark_candidate_not_warranted":
+            args = CandidateReasonInput(**arguments)
+            result = _candidate_store().transition(
+                args.candidate_id, expected_revision=args.expected_revision,
+                target_state="not-warranted", state_reason=args.rationale,
+            ).model_dump(mode="json")
+        elif name == "link_candidate_task":
+            args = LinkCandidateTaskInput(**arguments)
+            _task_store().get(args.task_id)
+            result = _candidate_store().link_task(
+                args.candidate_id, expected_revision=args.expected_revision, task_id=args.task_id
+            ).model_dump(mode="json")
+        elif name == "complete_candidate":
+            args = CompleteCandidateInput(**arguments)
+            if args.final_reference.kind == "managed-tool":
+                _tool_registry().get(args.final_reference.id)
+            result = _candidate_store().transition(
+                args.candidate_id,
+                expected_revision=args.expected_revision,
+                target_state=args.outcome,
+                state_reason=args.completion_rationale,
+                final_reference=args.final_reference,
+            ).model_dump(mode="json")
         elif name == "list_targets":
             EmptyInput(**arguments)
             result = {
@@ -832,7 +1094,7 @@ async def call_tool(
 async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
-    global _config, _run_store_instance, _task_store_instance
+    global _config, _run_store_instance, _task_store_instance, _candidate_store_instance
     global _skill_registry_cache, _skill_registry_cache_at, _skill_registry_cache_config
     _config = load_config()
     _skill_registry_cache = None
@@ -849,6 +1111,11 @@ async def run_stdio() -> None:
         archived_days=_config.retention.tasks.archived_days,
     )
     _task_store_instance.cleanup()
+    _candidate_store_instance = (
+        CandidateStore(_config.workspace.candidates)
+        if _config.workspace.candidates is not None
+        else None
+    )
 
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
