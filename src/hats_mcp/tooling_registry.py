@@ -29,6 +29,20 @@ class ToolingCandidate(BaseModel):
         return self.model_dump()
 
 
+class LegacyCandidateDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_schema: Literal["tooling-registry-v1"] = "tooling-registry-v1"
+    target_schema: Literal["candidate-v1"] = "candidate-v1"
+    id: str
+    title: str
+    legacy_status: ToolingStatus
+    promotion_rationale: str
+    proposed_capability: str
+    proposed_tool_id: None = None
+    missing_required_fields: list[str]
+
+
 class ToolingRegistry:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -120,3 +134,27 @@ class ToolingRegistry:
 
         finish_entry()
         return candidates
+
+    def candidate_import_drafts(self) -> list[LegacyCandidateDraft]:
+        missing = [
+            "problem.summary",
+            "problem.cause",
+            "problem.recurrence",
+            "problem.evidence",
+            "proposal.required_inputs",
+            "proposal.expected_outputs",
+            "proposal.safety",
+            "proposal.acceptance",
+            "ownership.owner_id",
+        ]
+        return [
+            LegacyCandidateDraft(
+                id=candidate.id,
+                title=candidate.title,
+                legacy_status=candidate.status,
+                promotion_rationale=candidate.promotion_reason,
+                proposed_capability=candidate.helper,
+                missing_required_fields=list(missing),
+            )
+            for candidate in self.candidates()
+        ]

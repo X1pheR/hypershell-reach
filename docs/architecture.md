@@ -31,7 +31,8 @@ One process owns configuration, target lookup, tool discovery and local state. H
 | Runs | Record technical execution state and ambiguous/interrupted outcomes. |
 | Tasks | Keep durable continuity only for work that needs recovery or handoff. |
 | Skills | Discover and retrieve read-only Agent Skills from configured sources. |
-| Tooling registry | Validate an optional deployment-owned registry and derive explicit promotion candidates without a second candidate store. |
+| Candidates | Validate and durably mutate typed Candidate YAML state with revision CAS and per-Candidate locking when Candidate storage is configured. |
+| Tooling registry | Preserve the optional deployment-owned Markdown registry as a read-only compatibility feed and import-preview source. |
 
 ## Managed tool execution
 

@@ -22,9 +22,10 @@ workspace:
   runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
+  candidates: /var/lib/hats/candidates  # optional until the deployment migration gate
 ```
 
-All workspace paths are explicit absolute paths. `runs` stores automatic execution metadata; `tasks` and `trash` are reserved for task continuity. Managed tool sources stay separate.
+All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata; `tasks` and `trash` are reserved for task continuity. `candidates`, when configured, stores one HATS-owned `candidate-v1` YAML record per Candidate. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
 
 ## Retention
 
@@ -79,9 +80,11 @@ sources:
     enabled: true
 ```
 
-The tooling registry is optional and deployment-owned. HATS currently reads only explicit promotion metadata from the registry for `tooling_candidates`; it does not infer candidate status from prose. Candidate entries use the same source registry rather than a separate candidate store.
+The tooling registry is an optional deployment-owned **legacy compatibility feed**. `tooling_candidates` retains its existing read-only result for current consumers, and `preview_candidate_imports` maps only explicitly declared legacy candidates to incomplete `candidate-v1` drafts. HATS does not infer missing problem, safety, ownership, interface or acceptance facts from prose.
 
-A candidate entry must declare `Status: observed|guarded`, `Promotion: candidate`, a non-empty `Promotion reason` and a non-empty `Helper candidate or implementation` field. Entries without a `Promotion` field remain valid and are omitted from the candidate view. Registry mutation is not part of the current MCP surface.
+A legacy candidate entry must declare `Status: observed|guarded`, `Promotion: candidate`, a non-empty `Promotion reason` and a non-empty `Helper candidate or implementation` field. Entries without a `Promotion` field remain valid and are omitted from the legacy candidate view. The Markdown source is never mutated by the Candidate lifecycle API.
+
+New mutable Candidate state is enabled independently through `workspace.candidates`. This additive split allows repository contracts and compatibility tests to land before a deployment performs a governed copy/validate/switch migration.
 
 ## Targets
 

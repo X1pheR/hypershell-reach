@@ -147,3 +147,40 @@ def test_registry_accepts_automated_promotion_as_non_candidate(tmp_path) -> None
     candidates = ToolingRegistry(path).candidates()
 
     assert [entry.id for entry in candidates] == ["ATR-034"]
+
+
+def test_legacy_candidate_mapping_preserves_known_fields_without_inventing_missing_facts(tmp_path) -> None:
+    draft = ToolingRegistry(_registry(tmp_path)).candidate_import_drafts()[0]
+
+    assert draft.id == "ATR-001"
+    assert draft.title == "Repeated selector ambiguity"
+    assert draft.legacy_status == "guarded"
+    assert draft.promotion_rationale == "The failure is recurring and has deterministic validation."
+    assert draft.proposed_capability == "Shared selector linting."
+    assert draft.proposed_tool_id is None
+    assert draft.missing_required_fields == [
+        "problem.summary",
+        "problem.cause",
+        "problem.recurrence",
+        "problem.evidence",
+        "proposal.required_inputs",
+        "proposal.expected_outputs",
+        "proposal.safety",
+        "proposal.acceptance",
+        "ownership.owner_id",
+    ]
+
+
+def test_malformed_legacy_candidate_fails_safe_during_import_mapping(tmp_path) -> None:
+    path = tmp_path / "tooling-registry.md"
+    path.write_text(
+        """### ATR-009 — Incomplete candidate
+- **Status:** guarded
+- **Promotion:** candidate
+- **Promotion reason:** Repeated.
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="candidate promotion requires"):
+        ToolingRegistry(path).candidate_import_drafts()

@@ -102,7 +102,13 @@ HATS currently exposes:
 - `skills_catalog` — compact live tier-1 discovery
 - `skill_get` — bounded selected skill content
 - `skill_read_file` — bounded supporting-file retrieval
-- `tooling_candidates` — explicit deployment-reviewed reusable-tooling candidates
+- `tooling_candidates` — backward-compatible read-only legacy candidate view
+- `preview_candidate_imports` — map legacy explicit candidates to Candidate v1 drafts without mutation
+- `list_candidates` / `get_candidate` — structured HATS-owned Candidate state
+- `create_candidate` / `update_candidate` — typed Candidate proposal mutation with revision CAS
+- `approve_candidate` / `block_candidate` / `mark_candidate_not_warranted` — explicit lifecycle transitions
+- `link_candidate_task` — link an approved Candidate to an existing HATS Task
+- `complete_candidate` — record an implemented or automated outcome and final capability reference
 - `run_command`
 - `run_shell`
 

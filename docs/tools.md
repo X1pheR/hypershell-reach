@@ -130,11 +130,43 @@ Counts an exact byte sequence from one bounded needle file inside another bounde
 
 Exit `0` means the exact count matched, `1` means the observed count differed and `2` means the local file contract was invalid. The tool is read-only and replaces the literal match-count mode from the legacy Compose preflight without coupling that generic filesystem check to Docker Compose.
 
-## `tooling_candidates`
+## Candidate tools
 
-The read-only candidate view returns explicit reusable-tooling promotion candidates from the optional configured tooling registry. Candidate status must be declared in the source entry; HATS does not infer it from free-form prose.
+### `tooling_candidates`
 
-The view is derived from the source registry rather than stored separately. Registry mutation is outside the current MCP surface.
+Backward-compatible read-only view of explicit candidates from the optional legacy Markdown tooling registry. Its result shape is retained for existing consumers.
+
+### `preview_candidate_imports`
+
+Read-only compatibility adapter from `tooling-registry-v1` to incomplete `candidate-v1` drafts. It copies only explicit legacy fields, reports missing required Candidate fields, and never mutates state.
+
+### `list_candidates` / `get_candidate`
+
+Read HATS-owned Candidate YAML state when `workspace.candidates` is configured. `list_candidates` may filter by the six-state Candidate lifecycle.
+
+### `create_candidate`
+
+Creates revision `1` with state `candidate`. Required proposal content includes problem/cause/recurrence/evidence, capability, typed input/output descriptions, safety boundary, acceptance postconditions, ownership and promotion rationale. There is no arbitrary document mutation API.
+
+### `update_candidate`
+
+Updates proposal content only and requires `expected_revision`. Lifecycle state is deliberately absent from this input contract, so approval cannot be smuggled through a generic update.
+
+### `approve_candidate`
+
+Transitions an eligible Candidate to `approved` with `expected_revision` and an approval rationale. Callers may invoke it only after explicit operator authorization. HATS validates state mechanics; availability of this tool is not authorization.
+
+### `block_candidate` / `mark_candidate_not_warranted`
+
+Typed state transitions that require `expected_revision` and preserve the original promotion rationale alongside the transition rationale.
+
+### `link_candidate_task`
+
+Links an approved or subsequently blocked Candidate to an existing HATS Task using the Task ID. The Candidate stores no Task filesystem path.
+
+### `complete_candidate`
+
+Transitions an approved Candidate to `implemented` or `automated` and requires a final `managed-tool` or `capability` reference. A `managed-tool` reference must resolve in the current effective ToolRegistry before state is committed.
 
 ## Raw execution
 

@@ -168,3 +168,17 @@ def test_tooling_registry_path_must_be_absolute() -> None:
 def test_tooling_registry_source_is_optional() -> None:
     config = HATSConfig.model_validate(_config())
     assert config.sources.tooling_registry is None
+
+
+def test_candidate_workspace_path_is_optional_and_must_be_absolute() -> None:
+    config = HATSConfig.model_validate(_config())
+    assert config.workspace.candidates is None
+
+    payload = _config()
+    payload["workspace"]["candidates"] = "/var/lib/hats/candidates"
+    config = HATSConfig.model_validate(payload)
+    assert config.workspace.candidates == "/var/lib/hats/candidates"
+
+    payload["workspace"]["candidates"] = "relative/candidates"
+    with pytest.raises(ValidationError, match="workspace paths must be absolute"):
+        HATSConfig.model_validate(payload)

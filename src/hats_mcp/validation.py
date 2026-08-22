@@ -222,8 +222,12 @@ def _workspace_lines(config: HATSConfig) -> tuple[list[str], int]:
     checks: list[tuple[str, str, bool, str]] = []
     errors = 0
     all_writable = True
-    for name in ("tmp", "runs", "tasks", "trash"):
+    names = ["tmp", "runs", "tasks", "trash"]
+    if config.workspace.candidates is not None:
+        names.append("candidates")
+    for name in names:
         value = getattr(config.workspace, name)
+        assert value is not None
         ok, state = _workspace_state(Path(value))
         checks.append((name, value, ok, state))
         if not ok:
