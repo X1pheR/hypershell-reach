@@ -59,7 +59,7 @@ HATS does not persist command bodies, argument values or command output in the R
 
 A Task keeps continuity for substantial work that may span sessions or be interrupted. It is not a project-management system and it does not grant permission to perform changes.
 
-The Tasks view intentionally shows only task ID, title, state, update time and retention state. Detailed task evidence can contain operational context that does not belong in the browser UI.
+The Tasks view intentionally shows only task ID, title, state, update time and retention state. The full continuity snapshot can contain operational context that does not belong in the browser UI.
 
 ## Skills
 
@@ -86,7 +86,7 @@ The UI does not render:
 - credential paths or secret values;
 - managed-tool source code;
 - command text, argument values or command output;
-- full Task continuity evidence.
+- full Task continuity state.
 
 Authentication, TLS, DNS and ingress policy are deployment concerns outside the generic HATS product.
 

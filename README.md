@@ -98,6 +98,7 @@ HATS currently exposes:
 - `get_task`
 - `create_task`
 - `update_task`
+- `close_task`
 - `archive_task`
 - `skills_catalog` — compact live tier-1 discovery
 - `skill_get` — bounded selected skill content

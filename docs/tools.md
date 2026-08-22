@@ -130,6 +130,28 @@ Counts an exact byte sequence from one bounded needle file inside another bounde
 
 Exit `0` means the exact count matched, `1` means the observed count differed and `2` means the local file contract was invalid. The tool is read-only and replaces the literal match-count mode from the legacy Compose preflight without coupling that generic filesystem check to Docker Compose.
 
+## Task tools
+
+### `list_tasks` / `get_task`
+
+Read active or archived Task continuity records. Task v1 YAML remains readable without an implicit rewrite. Task v2 records expose a monotonic `revision`; compact listings include both `schema_version` and `revision`.
+
+### `create_task`
+
+Creates a Task v2 record at revision `1` in the configured active Task root. A Task record contains logical continuity state only: it does not persist its filesystem path, an evidence path, secrets, or Run backlinks. New Tasks do not create an `evidence/` directory.
+
+### `update_task`
+
+Applies a typed partial update to one Task. Callers that perform read-modify-write flows should supply `expected_revision`; a stale value is rejected before state is committed. The argument remains optional for compatibility with the pre-v2 MCP contract, while all writes are serialized by a per-Task interprocess lock. A terminal `status` routes through the same server-owned close boundary as `close_task`, so a successful terminal update cannot leave the Task in the active root.
+
+### `close_task`
+
+Closes one Task as `completed` or `cancelled`. The server owns the complete boundary: final Task validation, revision increment, durable YAML replacement, Task-directory move to the archive root, and required directory fsyncs. Retrying the same committed final state is idempotent, including recovery when the final record or archive rename committed before the caller received success.
+
+### `archive_task`
+
+Backward-compatible terminal archival helper. It remains idempotent for callers using the previous two-step contract, but new callers should use `close_task` or a terminal `update_task`. Open Tasks cannot be archived.
+
 ## Candidate tools
 
 ### `tooling_candidates`

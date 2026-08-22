@@ -151,11 +151,28 @@ class UpdateTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int | None = Field(default=None, ge=0)
     title: str | None = Field(default=None, min_length=1, max_length=200)
     objective: str | None = Field(default=None, min_length=1, max_length=4_000)
     project_ref: str | None = Field(default=None, min_length=1, max_length=256)
     clear_project_ref: bool = False
     status: TaskStatus | None = None
+    next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
+    clear_next_action: bool = False
+    continuity: TaskContinuity | None = None
+    retained: bool | None = None
+
+
+class CloseTaskInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    status: Literal["completed", "cancelled"]
+    expected_revision: int | None = Field(default=None, ge=0)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    objective: str | None = Field(default=None, min_length=1, max_length=4_000)
+    project_ref: str | None = Field(default=None, min_length=1, max_length=256)
+    clear_project_ref: bool = False
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
     clear_next_action: bool = False
     continuity: TaskContinuity | None = None
@@ -290,6 +307,7 @@ def _task_store() -> TaskStore:
             _config.workspace.trash,
             archived_days=_config.retention.tasks.archived_days,
         )
+        _task_store_instance.repair()
         _task_store_instance.cleanup()
     return _task_store_instance
 
@@ -710,10 +728,25 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="close_task",
+            description=(
+                "Atomically close one HATS task as completed or cancelled, persist the final "
+                "record, and move it from the active root to the archive root. Retries of the "
+                "same committed final state are idempotent."
+            ),
+            inputSchema=CloseTaskInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="archive_task",
             description=(
-                "Move one completed or cancelled HATS task from the active task root to the "
-                "configured trash root. The move is reversible outside this API."
+                "Backward-compatible archival helper for terminal tasks. New callers should use "
+                "close_task or set a terminal status through update_task, both of which own closure."
             ),
             inputSchema=ArchiveTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -992,11 +1025,27 @@ async def call_tool(
             args = UpdateTaskInput(**arguments)
             result = _task_store().update(
                 args.task_id,
+                expected_revision=args.expected_revision,
                 title=args.title,
                 objective=args.objective,
                 project_ref=args.project_ref,
                 clear_project_ref=args.clear_project_ref,
                 status=args.status,
+                next_action=args.next_action,
+                clear_next_action=args.clear_next_action,
+                continuity=args.continuity,
+                retained=args.retained,
+            ).model_dump()
+        elif name == "close_task":
+            args = CloseTaskInput(**arguments)
+            result = _task_store().close(
+                args.task_id,
+                status=args.status,
+                expected_revision=args.expected_revision,
+                title=args.title,
+                objective=args.objective,
+                project_ref=args.project_ref,
+                clear_project_ref=args.clear_project_ref,
                 next_action=args.next_action,
                 clear_next_action=args.clear_next_action,
                 continuity=args.continuity,
@@ -1110,6 +1159,7 @@ async def run_stdio() -> None:
         _config.workspace.trash,
         archived_days=_config.retention.tasks.archived_days,
     )
+    _task_store_instance.repair()
     _task_store_instance.cleanup()
     _candidate_store_instance = (
         CandidateStore(_config.workspace.candidates)
