@@ -41,7 +41,12 @@ def _locked_version(package_name: str) -> str:
 
 
 def test_browser_container_matches_reviewed_playwright_runtime() -> None:
-    assert "docker run --rm --init --ipc=host --network host" in BROWSER
+    assert 'docker network create "${NETWORK}"' in BROWSER
+    assert 'BASE_URL="http://${APP_CONTAINER}:8080"' in BROWSER
+    assert '--network "${NETWORK}"' in BROWSER
+    assert "--network host" not in BROWSER
+    assert '-v "${ROOT_DIR}:/src:ro"' not in BROWSER
+    assert 'docker cp "${ROOT_DIR}/tests/test_browser.py"' in BROWSER
     assert '"playwright==1.62.0"' in BROWSER
     assert "playwright/python@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d" in BROWSER
     assert '"axe-playwright-python==0.1.8"' in BROWSER

@@ -9,7 +9,7 @@ from playwright.sync_api import Page, expect
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_BROWSER_TESTS") != "1",
-    reason="runner-local browser acceptance is executed by the dedicated CI job",
+    reason="canonical browser acceptance is executed by the dedicated CI job",
 )
 
 BASE_URL = os.environ.get("HATS_BROWSER_BASE_URL", "http://127.0.0.1:18081")
