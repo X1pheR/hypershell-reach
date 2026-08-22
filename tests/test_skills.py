@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from hats_mcp.config import SkillSource
-from hats_mcp.skills import HermesState, build_skill_registry, read_skill_file
+from hats_mcp.skills import (
+    HermesState,
+    build_skill_registry,
+    read_skill_file,
+    skill_sources_config_signature,
+    skill_sources_fingerprint,
+)
 
 
 def _skill(root: Path, relative: str, *, name: str, extra: str = "", body: str = "Body") -> Path:
@@ -57,12 +63,140 @@ def test_catalog_revision_changes_with_catalog_content(tmp_path) -> None:
     source = SkillSource(id="local", path=str(tmp_path))
     first = build_skill_registry([source]).catalog_revision()
 
+    assert build_skill_registry([source]).catalog_revision() == first
+
     _skill(tmp_path, "two", name="two")
     second = build_skill_registry([source]).catalog_revision()
 
     assert len(first) == 64
     assert len(second) == 64
     assert first != second
+
+
+def test_skill_freshness_keeps_catalog_revision_and_skill_sha_distinct(tmp_path) -> None:
+    skill_md = _skill(tmp_path, "one", name="one", body="first body")
+    source = SkillSource(id="local", path=str(tmp_path))
+    first_registry = build_skill_registry([source])
+    first_skill = first_registry.get("local:one")
+    first_revision = first_registry.catalog_revision()
+    first_fingerprint = skill_sources_fingerprint([source])
+
+    skill_md.write_text(
+        "---\nname: one\ndescription: Description for one.\n---\n# one\n\nsecond body\n",
+        encoding="utf-8",
+    )
+    second_registry = build_skill_registry([source])
+    second_skill = second_registry.get("local:one")
+
+    assert second_registry.catalog_revision() == first_revision
+    assert second_skill.sha256 != first_skill.sha256
+    assert skill_sources_fingerprint([source]) != first_fingerprint
+
+
+def test_support_file_change_changes_only_source_fingerprint(tmp_path) -> None:
+    _skill(tmp_path, "one", name="one")
+    support = tmp_path / "one/references/context.txt"
+    support.parent.mkdir(parents=True)
+    support.write_text("first", encoding="utf-8")
+    source = SkillSource(id="local", path=str(tmp_path))
+    first_registry = build_skill_registry([source])
+    first_revision = first_registry.catalog_revision()
+    first_sha = first_registry.get("local:one").sha256
+    first_fingerprint = skill_sources_fingerprint([source])
+
+    support.write_text("other", encoding="utf-8")
+    second_registry = build_skill_registry([source])
+
+    assert second_registry.catalog_revision() == first_revision
+    assert second_registry.get("local:one").sha256 == first_sha
+    assert skill_sources_fingerprint([source]) != first_fingerprint
+
+
+def test_source_fingerprint_detects_add_remove_and_rename(tmp_path) -> None:
+    _skill(tmp_path, "one", name="one")
+    source = SkillSource(id="local", path=str(tmp_path))
+    initial = skill_sources_fingerprint([source])
+
+    _skill(tmp_path, "two", name="two")
+    added = skill_sources_fingerprint([source])
+    assert added != initial
+
+    (tmp_path / "two").rename(tmp_path / "renamed")
+    renamed = skill_sources_fingerprint([source])
+    assert renamed != added
+
+    for path in (tmp_path / "renamed").iterdir():
+        path.unlink()
+    (tmp_path / "renamed").rmdir()
+    assert skill_sources_fingerprint([source]) == initial
+
+
+def test_source_fingerprint_is_stable_when_only_metadata_changes(tmp_path) -> None:
+    skill_md = _skill(tmp_path, "one", name="one")
+    source = SkillSource(id="local", path=str(tmp_path))
+    first = skill_sources_fingerprint([source])
+
+    skill_md.chmod(0o600)
+
+    assert skill_sources_fingerprint([source]) == first
+
+
+def test_hermes_provenance_metadata_changes_source_fingerprint(tmp_path) -> None:
+    _skill(tmp_path, "one", name="one")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(tmp_path),
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    first = skill_sources_fingerprint([source])
+
+    (tmp_path / ".bundled_manifest").write_text("one:abc\n", encoding="utf-8")
+
+    assert skill_sources_fingerprint([source]) != first
+
+
+def test_configured_source_signature_is_deterministic_and_ordered(tmp_path) -> None:
+    first = SkillSource(id="a", path=str(tmp_path / "a"), os_platform="linux")
+    second = SkillSource(id="b", path=str(tmp_path / "b"), os_platform="linux")
+
+    signature = skill_sources_config_signature([first, second])
+
+    assert skill_sources_config_signature([first.model_copy(), second.model_copy()]) == signature
+    assert skill_sources_config_signature([second, first]) != signature
+    assert (
+        skill_sources_config_signature([first.model_copy(update={"os_platform": "macos"}), second])
+        != signature
+    )
+
+
+def test_same_skill_name_across_sources_remains_source_qualified(tmp_path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    _skill(first_root, "shared", name="shared")
+    _skill(second_root, "shared", name="shared")
+    sources = [
+        SkillSource(id="a", path=str(first_root)),
+        SkillSource(id="b", path=str(second_root)),
+    ]
+
+    registry = build_skill_registry(sources)
+
+    assert [skill.id for skill in registry.list()] == ["a:shared", "b:shared"]
+    assert skill_sources_fingerprint(sources) == skill_sources_fingerprint(sources)
+
+
+def test_duplicate_skill_name_within_source_still_fails_closed(tmp_path) -> None:
+    _skill(tmp_path, "one", name="duplicate")
+    _skill(tmp_path, "two", name="duplicate")
+
+    with pytest.raises(ValueError, match="duplicate skill name in source local"):
+        build_skill_registry([SkillSource(id="local", path=str(tmp_path))])
 
 def test_platform_and_environment_filtering_for_filesystem_source(tmp_path) -> None:
     _skill(tmp_path, "mac", name="mac", extra="platforms: [macos]\n")

@@ -12,7 +12,7 @@ skill_read_file(skill_id, relative_path, offset, max_bytes)
 
 `skills_catalog` is the tier-1 discovery surface. It returns only effective skills using the same progressive-disclosure shape as Hermes: source-qualified ID, name, compact description and category, plus the category list, total count and a deterministic `catalog_revision`. Catalog descriptions are capped at 200 characters with an ellipsis when truncated; `skill_get` retains the full validated description and loads up to 128 KiB of `SKILL.md` by default. `skill_read_file` reads supporting files in bounded byte ranges.
 
-The catalog remains derived from live configured state rather than a synchronized copy. The stateful MCP runtime caches the complete effective registry for 60 seconds so a normal `skills_catalog` followed by one or more `skill_get` or `skill_read_file` calls does not repeat the Hermes projection and complete source scan. Set `refresh=true` on a Skills call after a known add, remove, edit or enable/disable change when immediate freshness is required. A refresh rebuilds the fail-closed registry before returning.
+The catalog remains derived from live configured state rather than a synchronized copy. HATS caches the complete effective registry for 60 seconds, but cache reuse is guarded by a deterministic signature of the configured skill-source definitions and an internal source snapshot. The snapshot contains a deterministic content fingerprint plus a process-local metadata probe over the paths that can affect it. Unchanged probe metadata reuses the cached fingerprint cheaply; any probe change causes a fresh content fingerprint before registry reuse is decided. A source-content change therefore invalidates stale registry state before TTL expiry, while an unchanged source avoids another Hermes projection and registry rebuild. The TTL remains a fallback for effective state that is not represented by mounted source content, such as a remote Hermes enable/disable change. Set `refresh=true` when an explicit immediate rebuild is required.
 
 Source-qualified IDs avoid cross-source ambiguity:
 
@@ -66,7 +66,7 @@ The state projector is shipped by HATS and streamed over the existing bounded SS
 - configured external skill directory entries;
 - the effective skill names returned by Hermes' own current `skills_list` implementation.
 
-It does not return other Hermes configuration fields or secret values. The projection is queried when the 60-second effective-registry cache is cold or when a caller explicitly requests `refresh=true`. No manual synchronization or HATS restart is required after ordinary add, remove, edit or enable/disable changes.
+It does not return other Hermes configuration fields or secret values. The projection is queried when the effective-registry cache is cold, when configured source definitions or effective source content invalidate the cache, when the 60-second TTL expires, or when a caller explicitly requests `refresh=true`. No manual synchronization or HATS restart is required after ordinary source-content changes. A remote Hermes-only enable/disable change remains bounded by the TTL unless the caller requests an explicit refresh.
 
 HATS fails closed when Hermes reports an effective skill whose content is not present in the configured HATS content source. This prevents silent drift when a future external or plugin-provided skill becomes active before HATS has a readable content source for it.
 
@@ -84,7 +84,15 @@ A script inside a skill package remains read-only skill content. It is never reg
 
 ## Content retrieval
 
-A consumer should load `skills_catalog` once at the start of a new agent conversation so the model is aware of available skills, then call `skill_get` only for skills relevant to the current work. Reuse an already-loaded catalog and skill content within the same conversation while its revision is still current; do not reload a skill merely because another user turn arrived.
+A consumer should load `skills_catalog` once when it needs current discovery, then call `skill_get` only for skills relevant to the current work. Reuse an already-discovered catalog while its revision remains valid. A change in client-side task scope is an applicability decision and does not by itself require catalog rediscovery. If context compression or handoff creates uncertainty about one previously loaded skill, reload only that skill with `skill_get`; the catalog does not need rediscovery merely because model context changed. HATS stores no server-side conversation, session or "currently loaded skills" state.
+
+Three hashes have deliberately separate meanings:
+
+- `catalog_revision` is client-visible and hashes only the deterministic effective catalog summary (`id`, `name`, compact description and category);
+- each skill `sha256` is the existing SHA-256 of its normalized `SKILL.md` content;
+- the effective-source freshness fingerprint is internal cache state and hashes source-qualified package paths plus raw file content, including supporting files and Hermes discovery/provenance metadata. It is not another client-visible version.
+
+Filesystem timestamps, inode numbers, ownership and modes do not affect the deterministic content fingerprint. They are used only by the process-local cheap probe to decide when that fingerprint must be recomputed. Added, removed or renamed package files do affect the fingerprint. Freshness scans reject symlinked source/skill structures consistently with normal discovery and are bounded to 20,000 hashed files, 512 MiB of package content and 50,000 tracked probe paths per snapshot.
 
 `skill_get` returns:
 

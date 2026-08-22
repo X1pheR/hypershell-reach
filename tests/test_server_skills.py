@@ -176,3 +176,226 @@ async def test_skill_get_default_reads_full_supported_skill(tmp_path, monkeypatc
 
     assert detail["skill_md"]["truncated"] is False
     assert detail["skill_md"]["total_bytes"] > 32_768
+
+
+@pytest.mark.asyncio
+async def test_skill_content_change_invalidates_cache_before_ttl(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    calls = 0
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    first_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
+    first = json.loads(first_content[0].text)
+    skill_path = tmp_path / "skills/example/SKILL.md"
+    skill_path.write_text(
+        "---\nname: example\ndescription: Example skill.\n---\n# Example\n\nChanged instructions.\n",
+        encoding="utf-8",
+    )
+
+    second_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
+    second = json.loads(second_content[0].text)
+
+    assert second["sha256"] != first["sha256"]
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_support_file_change_invalidates_cache_before_ttl(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    support = tmp_path / "skills/example/references/context.txt"
+    support.parent.mkdir(parents=True)
+    support.write_text("first", encoding="utf-8")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    calls = 0
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    first_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
+    first = json.loads(first_content[0].text)
+    support.write_text("other", encoding="utf-8")
+    second_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
+    second = json.loads(second_content[0].text)
+
+    assert second["sha256"] == first["sha256"]
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_configured_source_change_invalidates_cache_before_ttl(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    calls = 0
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    await server.call_tool("skills_catalog", {})
+    config.sources.skills[0].active_environments.append("docker")
+    await server.call_tool("skills_catalog", {})
+
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_ttl_remains_fallback_for_unchanged_source(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    calls = 0
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    snapshot_calls = 0
+    original_snapshot = server.skill_sources_snapshot
+
+    def counted_snapshot(sources):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        return original_snapshot(sources)
+
+    monkeypatch.setattr(server, "skill_sources_snapshot", counted_snapshot)
+    await server.call_tool("skills_catalog", {})
+    await server.call_tool("skills_catalog", {})
+    assert calls == 1
+    assert snapshot_calls == 1
+
+    server._skill_registry_cache_at -= server.SKILL_REGISTRY_CACHE_TTL_SECONDS + 1
+    await server.call_tool("skills_catalog", {})
+
+    assert calls == 2
+    assert snapshot_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_progressive_disclosure_does_not_auto_load_support_content(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    support = tmp_path / "skills/example/references/context.txt"
+    support.parent.mkdir(parents=True)
+    support.write_text("support-content-only", encoding="utf-8")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+
+    async def fake_run_ssh(**kwargs):
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    detail_content = await server.call_tool("skill_get", {"skill_id": "hermes:example"})
+    detail = json.loads(detail_content[0].text)
+
+    assert {file["path"] for file in detail["files"]} == {"SKILL.md", "references/context.txt"}
+    assert "support-content-only" not in detail_content[0].text
+
+    support_content = await server.call_tool(
+        "skill_read_file",
+        {"skill_id": "hermes:example", "relative_path": "references/context.txt"},
+    )
+    support_result = json.loads(support_content[0].text)
+    assert support_result["content"] == "support-content-only"
+
+
+def test_skill_inputs_store_no_client_scope_or_loaded_skill_state() -> None:
+    assert set(server.SkillCatalogInput.model_fields) == {"refresh"}
+    assert set(server.SkillGetInput.model_fields) == {"skill_id", "max_bytes", "refresh"}
+    assert set(server.SkillReadFileInput.model_fields) == {
+        "skill_id",
+        "relative_path",
+        "offset",
+        "max_bytes",
+        "refresh",
+    }
+    assert not any("loaded_skill" in name or "session_skill" in name for name in vars(server))

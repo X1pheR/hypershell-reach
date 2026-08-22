@@ -5,7 +5,7 @@ HATS uses Semantic Versioning. While the project is on `0.x`, minor versions may
 ## Release flow
 
 1. Start from a clean `main` checkout that matches the remote branch.
-2. Run `uv run --frozen --extra dev pytest`, build the repository Dockerfile with the exact package version and Git revision, and require repository CI for the exact commit to pass:
+2. Run `uv run --frozen --extra dev pytest` and `bash scripts/ci-browser.sh`, build the repository Dockerfile with the exact package version and Git revision, and require repository CI for the exact commit to pass. The browser acceptance entrypoint is the canonical topology: HATS UI and Playwright run as sibling containers on an ephemeral Docker network and communicate by container DNS, without host-network or host-visible bind-mount assumptions:
 
    ```bash
    package_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
@@ -25,7 +25,7 @@ HATS uses Semantic Versioning. While the project is on `0.x`, minor versions may
 6. Push only the accepted tag. The `Release` workflow validates the tag/version pair, reruns the exact-tag test suite, builds wheel and sdist with `SOURCE_DATE_EPOCH` fixed to the release commit timestamp, writes `SHA256SUMS`, and creates the GitHub release from that tag.
 7. Treat the published tag and release assets as immutable. If release contents need correction, create a new version instead of replacing an accepted artifact.
 8. Deployments select and pin an exact reviewed release or commit.
-9. Validate the deployed revision through the deployment's normal acceptance checks.
+9. Validate the deployed revision through the deployment's normal acceptance checks. When a release changes an MCP tool contract, do not accept the deployment until the deployed server schema, gateway-exposed schema and every maintained consumer surface that receives that tool all expose the expected contract. A server-side schema change alone is not sufficient evidence that an already-bound consumer refreshed its tool metadata.
 
 ## Publication boundary
 

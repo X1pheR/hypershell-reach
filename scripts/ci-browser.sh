@@ -6,7 +6,12 @@ RESULTS_ROOT="${BROWSER_RESULTS_ROOT:-${ROOT_DIR}/test-results}"
 BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser"
 APP_LOG="${RESULTS_ROOT}/hats-ui.log"
 PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d"
-BASE_URL="http://127.0.0.1:18081"
+RUN_ID="${BROWSER_RUN_ID:-$(date +%s)-$$}"
+NETWORK="hats-browser-${RUN_ID}"
+APP_CONTAINER="hats-browser-app-${RUN_ID}"
+PLAYWRIGHT_CONTAINER="hats-browser-playwright-${RUN_ID}"
+APP_IMAGE="hats-browser-app:${RUN_ID}"
+BASE_URL="http://${APP_CONTAINER}:8080"
 FIXTURE_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/hats-browser.XXXXXX")"
 
 mkdir -p "${BROWSER_RESULTS_DIR}"
@@ -44,22 +49,22 @@ cat > "${FIXTURE_ROOT}/registry.md" <<'MD'
 - **Helper candidate or implementation:** example.inspect
 MD
 
-cat > "${FIXTURE_ROOT}/config.yaml" <<YAML
+cat > "${FIXTURE_ROOT}/config.yaml" <<'YAML'
 schema_version: 1
 workspace:
-  tmp: ${FIXTURE_ROOT}/tmp
-  runs: ${FIXTURE_ROOT}/runs
-  tasks: ${FIXTURE_ROOT}/tasks
-  trash: ${FIXTURE_ROOT}/trash
+  tmp: /fixture/tmp
+  runs: /fixture/runs
+  tasks: /fixture/tasks
+  trash: /fixture/trash
 sources:
   tools:
     - id: local
-      path: ${FIXTURE_ROOT}/tools
+      path: /fixture/tools
   skills:
     - id: local
-      path: ${FIXTURE_ROOT}/skills
+      path: /fixture/skills
   tooling_registry:
-    path: ${FIXTURE_ROOT}/registry.md
+    path: /fixture/registry.md
 targets:
   docker:
     display_name: Browser fixture
@@ -71,49 +76,98 @@ targets:
       known_hosts_file: /run/secrets/unused_known_hosts
 YAML
 
-app_pid=""
+app_created=0
+playwright_created=0
+network_created=0
+image_created=0
+
 cleanup() {
-  if [[ -n "${app_pid}" ]]; then
-    kill "${app_pid}" >/dev/null 2>&1 || true
-    wait "${app_pid}" >/dev/null 2>&1 || true
+  set +e
+  if [[ "${app_created}" -eq 1 ]]; then
+    docker logs "${APP_CONTAINER}" > "${APP_LOG}" 2>&1 || true
+  fi
+  if [[ "${playwright_created}" -eq 1 ]]; then
+    docker rm -f "${PLAYWRIGHT_CONTAINER}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${app_created}" -eq 1 ]]; then
+    docker rm -f "${APP_CONTAINER}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${network_created}" -eq 1 ]]; then
+    docker network rm "${NETWORK}" >/dev/null 2>&1 || true
+  fi
+  if [[ "${image_created}" -eq 1 ]]; then
+    docker image rm -f "${APP_IMAGE}" >/dev/null 2>&1 || true
   fi
   rm -rf "${FIXTURE_ROOT}"
 }
 trap cleanup EXIT
 
-uv run --frozen --extra dev hats-ui \
-  --config "${FIXTURE_ROOT}/config.yaml" \
-  --host 127.0.0.1 \
-  --port 18081 > "${APP_LOG}" 2>&1 &
-app_pid=$!
+docker build -t "${APP_IMAGE}" "${ROOT_DIR}"
+image_created=1
 
-for attempt in $(seq 1 30); do
-  if curl --fail --silent "${BASE_URL}/healthz" >/dev/null; then
-    break
-  fi
-  if [[ "${attempt}" -eq 30 ]]; then
-    echo "HATS UI did not become ready" >&2
-    exit 1
-  fi
-  sleep 1
-done
+docker network create "${NETWORK}" >/dev/null
+network_created=1
 
-docker run --rm --init --ipc=host --network host \
+docker create \
+  --name "${APP_CONTAINER}" \
+  --network "${NETWORK}" \
+  -e HATS_CONFIG=/fixture/config.yaml \
+  "${APP_IMAGE}" \
+  hats-ui --config /fixture/config.yaml --host 0.0.0.0 --port 8080 >/dev/null
+app_created=1
+
+docker cp "${FIXTURE_ROOT}/." "${APP_CONTAINER}:/fixture"
+docker start "${APP_CONTAINER}" >/dev/null
+
+if ! docker run --rm --network "${NETWORK}" \
+  -e TARGET_URL="${BASE_URL}/healthz" \
+  "${PLAYWRIGHT_IMAGE}" \
+  python -c 'import os, sys, time, urllib.request
+url = os.environ["TARGET_URL"]
+for _ in range(30):
+    try:
+        with urllib.request.urlopen(url, timeout=2) as response:
+            if response.status == 200:
+                raise SystemExit(0)
+    except Exception:
+        pass
+    time.sleep(1)
+raise SystemExit(1)'; then
+  echo "HATS UI did not become reachable from the browser-test network" >&2
+  exit 1
+fi
+
+docker create \
+  --name "${PLAYWRIGHT_CONTAINER}" \
+  --init \
+  --ipc=host \
+  --network "${NETWORK}" \
   -e RUN_BROWSER_TESTS=1 \
   -e HATS_BROWSER_BASE_URL="${BASE_URL}" \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -e PYTEST_ADDOPTS='-p no:cacheprovider' \
-  -v "${ROOT_DIR}:/src:ro" \
-  -v "${BROWSER_RESULTS_DIR}:/test-results/browser" \
   -w /src \
   "${PLAYWRIGHT_IMAGE}" \
-  bash -lc 'python -m pip install --disable-pip-version-check -q \
-    "playwright==1.62.0" \
-    "pytest==9.1.1" \
-    "pytest-asyncio==1.4.0" \
-    "pytest-playwright==0.9.0" \
-    "axe-playwright-python==0.1.8" && \
-    pytest -q tests/test_browser.py --browser=chromium \
+  bash -lc 'mkdir -p /src/tests /test-results/browser && \
+    cp /test_browser.py /src/tests/test_browser.py && \
+    python -m pip install --disable-pip-version-check -q \
+      "playwright==1.62.0" \
+      "pytest==9.1.1" \
+      "pytest-asyncio==1.4.0" \
+      "pytest-playwright==0.9.0" \
+      "axe-playwright-python==0.1.8" && \
+    pytest -q /src/tests/test_browser.py --browser=chromium \
       --tracing=retain-on-failure \
       --screenshot=only-on-failure \
-      --output=/test-results/browser'
+      --output=/test-results/browser' >/dev/null
+playwright_created=1
+
+docker cp "${ROOT_DIR}/tests/test_browser.py" "${PLAYWRIGHT_CONTAINER}:/test_browser.py"
+
+set +e
+docker start -a "${PLAYWRIGHT_CONTAINER}"
+test_status=$?
+set -e
+
+docker cp "${PLAYWRIGHT_CONTAINER}:/test-results/browser/." "${BROWSER_RESULTS_DIR}/" 2>/dev/null || true
+exit "${test_status}"

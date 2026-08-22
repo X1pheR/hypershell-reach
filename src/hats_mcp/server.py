@@ -22,7 +22,17 @@ from .candidates import (
 from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
-from .skills import HermesState, SkillRegistry, build_skill_registry, list_skill_files, read_skill_file
+from .skills import (
+    HermesState,
+    SkillRegistry,
+    SkillSourcesSnapshot,
+    build_skill_registry,
+    list_skill_files,
+    read_skill_file,
+    skill_sources_config_signature,
+    skill_sources_probe_unchanged,
+    skill_sources_snapshot,
+)
 from .runs import PURPOSE_MAX_LENGTH, RunOperation, RunStatus, RunStore, normalize_run_purpose
 from .tasks import TaskContinuity, TaskStatus, TaskStore
 from .tooling_registry import ToolingRegistry
@@ -34,7 +44,8 @@ _task_store_instance: TaskStore | None = None
 _candidate_store_instance: CandidateStore | None = None
 _skill_registry_cache: SkillRegistry | None = None
 _skill_registry_cache_at = 0.0
-_skill_registry_cache_config: HATSConfig | None = None
+_skill_registry_cache_config_signature: str | None = None
+_skill_registry_cache_source_snapshot: SkillSourcesSnapshot | None = None
 _skill_registry_lock = asyncio.Lock()
 SKILL_REGISTRY_CACHE_TTL_SECONDS = 60.0
 
@@ -463,32 +474,61 @@ async def _build_skill_registry() -> SkillRegistry:
 
 
 async def _skill_registry(*, refresh: bool = False) -> SkillRegistry:
-    global _skill_registry_cache, _skill_registry_cache_at, _skill_registry_cache_config
+    global _skill_registry_cache, _skill_registry_cache_at
+    global _skill_registry_cache_config_signature, _skill_registry_cache_source_snapshot
 
-    config = _config
+    def config_signature() -> str:
+        return skill_sources_config_signature(_config.sources.skills)
+
+    configured = config_signature()
     now = time.monotonic()
     if (
         not refresh
         and _skill_registry_cache is not None
-        and _skill_registry_cache_config is config
+        and _skill_registry_cache_config_signature == configured
+        and _skill_registry_cache_source_snapshot is not None
         and now - _skill_registry_cache_at < SKILL_REGISTRY_CACHE_TTL_SECONDS
+        and skill_sources_probe_unchanged(_skill_registry_cache_source_snapshot)
     ):
         return _skill_registry_cache
 
     async with _skill_registry_lock:
+        configured = config_signature()
         now = time.monotonic()
+        cached_snapshot = _skill_registry_cache_source_snapshot
         if (
             not refresh
             and _skill_registry_cache is not None
-            and _skill_registry_cache_config is config
+            and _skill_registry_cache_config_signature == configured
+            and cached_snapshot is not None
             and now - _skill_registry_cache_at < SKILL_REGISTRY_CACHE_TTL_SECONDS
         ):
-            return _skill_registry_cache
-        registry = await _build_skill_registry()
-        _skill_registry_cache = registry
-        _skill_registry_cache_at = time.monotonic()
-        _skill_registry_cache_config = config
-        return registry
+            if skill_sources_probe_unchanged(cached_snapshot):
+                return _skill_registry_cache
+            current_snapshot = skill_sources_snapshot(_config.sources.skills)
+            if current_snapshot.fingerprint == cached_snapshot.fingerprint:
+                _skill_registry_cache_source_snapshot = current_snapshot
+                return _skill_registry_cache
+        else:
+            current_snapshot = skill_sources_snapshot(_config.sources.skills)
+
+        for attempt in range(2):
+            registry = await _build_skill_registry()
+            final_configured = config_signature()
+            if (
+                final_configured == configured
+                and skill_sources_probe_unchanged(current_snapshot)
+            ):
+                _skill_registry_cache = registry
+                _skill_registry_cache_at = time.monotonic()
+                _skill_registry_cache_config_signature = final_configured
+                _skill_registry_cache_source_snapshot = current_snapshot
+                return registry
+            if attempt == 0:
+                configured = final_configured
+                current_snapshot = skill_sources_snapshot(_config.sources.skills)
+
+        raise RuntimeError("skill sources changed during registry rebuild")
 
 
 @app.list_tools()
@@ -497,9 +537,9 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="skills_catalog",
             description=(
-                "Return compact metadata for configured Agent Skills. A short-lived cached "
-                "effective registry avoids repeated source scans; set refresh=true after a "
-                "known skill-state change."
+                "Return compact metadata for configured Agent Skills. Freshness-checked cached "
+                "state avoids repeated registry rebuilds; set refresh=true for an explicit "
+                "immediate rebuild."
             ),
             inputSchema=SkillCatalogInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -1186,11 +1226,13 @@ async def run_stdio() -> None:
     from mcp.server.stdio import stdio_server
 
     global _config, _run_store_instance, _task_store_instance, _candidate_store_instance
-    global _skill_registry_cache, _skill_registry_cache_at, _skill_registry_cache_config
+    global _skill_registry_cache, _skill_registry_cache_at
+    global _skill_registry_cache_config_signature, _skill_registry_cache_source_snapshot
     _config = load_config()
     _skill_registry_cache = None
     _skill_registry_cache_at = 0.0
-    _skill_registry_cache_config = None
+    _skill_registry_cache_config_signature = None
+    _skill_registry_cache_source_snapshot = None
     _run_store_instance = RunStore(
         _config.workspace.runs,
         completed_days=_config.retention.runs.completed_days,

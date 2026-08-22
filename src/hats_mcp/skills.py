@@ -38,6 +38,11 @@ MAX_SUPPORT_FILE_BYTES = 16_777_216
 MAX_READ_BYTES = 131_072
 MAX_DESCRIPTION_LENGTH = 1024
 MAX_CATALOG_DESCRIPTION_LENGTH = 200
+MAX_FRESHNESS_FILES = 20_000
+MAX_FRESHNESS_BYTES = 536_870_912
+MAX_FRESHNESS_PROBE_PATHS = 50_000
+_FRESHNESS_CHUNK_BYTES = 1_048_576
+_HERMES_FRESHNESS_METADATA = (".bundled_manifest", ".hub/lock.json", "_org/.active_org")
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -48,6 +53,21 @@ class HermesState:
     external_dirs: tuple[str, ...]
     consumer_platform: str | None
     stderr_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class SkillSourceProbeEntry:
+    path: str
+    mode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+
+@dataclass(frozen=True)
+class SkillSourcesSnapshot:
+    fingerprint: str
+    probe_entries: tuple[SkillSourceProbeEntry, ...]
 
 
 @dataclass(frozen=True)
@@ -217,7 +237,12 @@ def _read_active_org(root: Path) -> str | None:
     return value or None
 
 
-def _iter_skill_files(root: Path, *, hermes: bool) -> list[Path]:
+def _iter_skill_files(
+    root: Path,
+    *,
+    hermes: bool,
+    probe_entries: dict[Path, SkillSourceProbeEntry] | None = None,
+) -> list[Path]:
     if root.is_symlink():
         raise ValueError(f"skill source root must not be a symlink: {root}")
     active_org = _read_active_org(root) if hermes else None
@@ -226,6 +251,8 @@ def _iter_skill_files(root: Path, *, hermes: bool) -> list[Path]:
 
     for current_text, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(current_text)
+        if probe_entries is not None:
+            probe_entries.setdefault(current, _probe_entry(current))
         has_skill_md = "SKILL.md" in filenames
         if current == root and hermes and "_org" in dirnames and active_org is None:
             dirnames.remove("_org")
@@ -251,6 +278,180 @@ def _iter_skill_files(root: Path, *, hermes: bool) -> list[Path]:
             matches.append(candidate)
 
     return sorted(matches)
+
+
+def _validated_source_root(source: SkillSource) -> Path:
+    root = Path(source.path)
+    if not root.exists():
+        raise ValueError(f"skill source does not exist: {source.id}")
+    if not root.is_dir():
+        raise ValueError(f"skill source is not a directory: {source.id}")
+    if root.is_symlink():
+        raise ValueError(f"skill source root must not be a symlink: {source.id}")
+    return root.resolve()
+
+
+def skill_sources_config_signature(sources: list[SkillSource]) -> str:
+    """Return a deterministic signature for configured skill-source definitions."""
+
+    payload = [source.model_dump(mode="json") for source in sources]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _iter_package_files(
+    root: Path,
+    skill_dirs: list[Path],
+    *,
+    probe_entries: dict[Path, SkillSourceProbeEntry] | None = None,
+) -> list[Path]:
+    files: dict[str, Path] = {}
+    for skill_dir in skill_dirs:
+        for current_text, dirnames, filenames in os.walk(skill_dir, followlinks=False):
+            current = Path(current_text)
+            if probe_entries is not None:
+                probe_entries.setdefault(current, _probe_entry(current))
+            dirnames[:] = sorted(
+                dirname
+                for dirname in dirnames
+                if dirname not in EXCLUDED_SKILL_DIRS and not (current / dirname).is_symlink()
+            )
+            for filename in sorted(filenames):
+                path = current / filename
+                if path.is_symlink() or not path.is_file():
+                    continue
+                relative = path.relative_to(root).as_posix()
+                files.setdefault(relative, path)
+    return [files[relative] for relative in sorted(files)]
+
+
+def _probe_entry(path: Path) -> SkillSourceProbeEntry:
+    stat_result = path.stat(follow_symlinks=False)
+    return SkillSourceProbeEntry(
+        path=str(path),
+        mode=stat_result.st_mode,
+        size=stat_result.st_size,
+        mtime_ns=stat_result.st_mtime_ns,
+        ctime_ns=stat_result.st_ctime_ns,
+    )
+
+
+def _hash_regular_file(path: Path, before: SkillSourceProbeEntry) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(_FRESHNESS_CHUNK_BYTES):
+            digest.update(chunk)
+    after = _probe_entry(path)
+    if after != before:
+        raise RuntimeError(f"skill source file changed during freshness probe: {path}")
+    return digest.hexdigest()
+
+
+def skill_sources_snapshot(sources: list[SkillSource]) -> SkillSourcesSnapshot:
+    """Build deterministic content freshness plus a cheap process-local change probe.
+
+    The fingerprint covers every regular file inside discoverable skill packages plus
+    Hermes metadata that changes discovery or provenance. It excludes timestamps,
+    ownership, inode numbers and modes. The probe entries retain filesystem metadata
+    only to avoid rehashing unchanged content on every cache access; any probe change
+    causes a fresh deterministic content snapshot before registry reuse is decided.
+    """
+
+    digest = hashlib.sha256()
+    file_count = 0
+    byte_count = 0
+    observed_probe_entries: dict[Path, SkillSourceProbeEntry] = {}
+    for source in sources:
+        if not source.enabled:
+            continue
+        root = _validated_source_root(source)
+        source_probe_entries: dict[Path, SkillSourceProbeEntry] = {
+            root: _probe_entry(root)
+        }
+        skill_files = _iter_skill_files(
+            root,
+            hermes=source.type == "hermes",
+            probe_entries=source_probe_entries,
+        )
+        paths = _iter_package_files(
+            root,
+            [path.parent for path in skill_files],
+            probe_entries=source_probe_entries,
+        )
+        if source.type == "hermes":
+            for relative in (".hub", "_org"):
+                directory = root / relative
+                if directory.is_dir() and not directory.is_symlink():
+                    source_probe_entries.setdefault(directory, _probe_entry(directory))
+            by_relative = {path.relative_to(root).as_posix(): path for path in paths}
+            for relative in _HERMES_FRESHNESS_METADATA:
+                path = root.joinpath(*PurePosixPath(relative).parts)
+                if path.is_symlink() or not path.is_file():
+                    continue
+                by_relative.setdefault(relative, path)
+            paths = [by_relative[relative] for relative in sorted(by_relative)]
+
+        source_header = {"id": source.id, "type": source.type}
+        digest.update(
+            json.dumps(source_header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            + b"\n"
+        )
+        for path in paths:
+            file_count += 1
+            if file_count > MAX_FRESHNESS_FILES:
+                raise RuntimeError(
+                    f"skill freshness probe exceeds {MAX_FRESHNESS_FILES} files"
+                )
+            before = _probe_entry(path)
+            source_probe_entries.setdefault(path, before)
+            byte_count += before.size
+            if byte_count > MAX_FRESHNESS_BYTES:
+                raise RuntimeError(
+                    f"skill freshness probe exceeds {MAX_FRESHNESS_BYTES} bytes"
+                )
+            sha256 = _hash_regular_file(path, before)
+            entry = {
+                "path": path.relative_to(root).as_posix(),
+                "bytes": before.size,
+                "sha256": sha256,
+            }
+            digest.update(
+                json.dumps(entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                + b"\n"
+            )
+        for path, entry in source_probe_entries.items():
+            observed_probe_entries.setdefault(path, entry)
+
+    if len(observed_probe_entries) > MAX_FRESHNESS_PROBE_PATHS:
+        raise RuntimeError(
+            f"skill freshness probe exceeds {MAX_FRESHNESS_PROBE_PATHS} tracked paths"
+        )
+    probe_entries: list[SkillSourceProbeEntry] = []
+    for path in sorted(observed_probe_entries):
+        observed = observed_probe_entries[path]
+        current = _probe_entry(path)
+        if current != observed:
+            raise RuntimeError(f"skill source changed during freshness probe: {path}")
+        probe_entries.append(current)
+    return SkillSourcesSnapshot(
+        fingerprint=digest.hexdigest(),
+        probe_entries=tuple(probe_entries),
+    )
+
+
+def skill_sources_probe_unchanged(snapshot: SkillSourcesSnapshot) -> bool:
+    """Return whether all paths that can affect the cached snapshot remain unchanged."""
+
+    try:
+        return all(_probe_entry(Path(entry.path)) == entry for entry in snapshot.probe_entries)
+    except OSError:
+        return False
+
+
+def skill_sources_fingerprint(sources: list[SkillSource]) -> str:
+    """Return the deterministic content fingerprint for configured enabled sources."""
+
+    return skill_sources_snapshot(sources).fingerprint
 
 
 def _category(root: Path, skill_dir: Path) -> str | None:
@@ -312,14 +513,7 @@ def _scan_source(
     *,
     allow_unresolved_hermes: bool = False,
 ) -> tuple[list[SkillPackage], dict[str, object]]:
-    root = Path(source.path)
-    if not root.exists():
-        raise ValueError(f"skill source does not exist: {source.id}")
-    if not root.is_dir():
-        raise ValueError(f"skill source is not a directory: {source.id}")
-    if root.is_symlink():
-        raise ValueError(f"skill source root must not be a symlink: {source.id}")
-    root = root.resolve()
+    root = _validated_source_root(source)
 
     bundled = _read_bundled_names(root) if source.type == "hermes" else set()
     hub = _read_hub_metadata(root) if source.type == "hermes" else {}
@@ -428,14 +622,7 @@ def _scan_source(
 def inspect_skill_source_summary(source: SkillSource) -> dict[str, object]:
     """Return cheap local content availability/count without parsing package metadata."""
 
-    root = Path(source.path)
-    if not root.exists():
-        raise ValueError(f"skill source does not exist: {source.id}")
-    if not root.is_dir():
-        raise ValueError(f"skill source is not a directory: {source.id}")
-    if root.is_symlink():
-        raise ValueError(f"skill source root must not be a symlink: {source.id}")
-    root = root.resolve()
+    root = _validated_source_root(source)
     return {
         "id": source.id,
         "type": source.type,
