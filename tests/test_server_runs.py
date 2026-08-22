@@ -56,7 +56,7 @@ async def test_run_command_persists_metadata_without_command(tmp_path, monkeypat
     monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
     content = await server.call_tool(
         "run_command",
-        {"target": "example", "command": "echo sensitive-command"},
+        {"target": "example", "command": "echo sensitive-command", "purpose": "Verify safe command execution persistence."},
     )
     result = json.loads(content[0].text)
     record = server._run_store_instance.get(result["run_id"])
@@ -81,7 +81,7 @@ async def test_local_execution_error_finishes_run(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
     content = await server.call_tool(
         "run_command",
-        {"target": "example", "command": "true"},
+        {"target": "example", "command": "true", "purpose": "Exercise local execution failure handling."},
     )
 
     assert content[0].text.startswith("ERROR:")
