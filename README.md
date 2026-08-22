@@ -17,7 +17,7 @@ flowchart LR
     HATS --> Skills[Skill sources]
 ```
 
-The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent run metadata, task continuity, progressive read-only Agent Skills discovery, tooling-candidate visibility and an optional read-only Web UI with integrated documentation.
+The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent Run purpose and bounded result metadata, task continuity, progressive read-only Agent Skills discovery, tooling-candidate visibility and an optional read-only Web UI with integrated documentation.
 
 ## Design
 

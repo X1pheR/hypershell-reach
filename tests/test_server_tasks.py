@@ -83,7 +83,7 @@ async def test_task_lifecycle_and_run_linkage(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
     run_content = await server.call_tool(
         "run_command",
-        {"target": "example", "command": "true", "task_id": created["id"]},
+        {"target": "example", "command": "true", "purpose": "Validate Task-linked execution continuity.", "task_id": created["id"]},
     )
     run = json.loads(run_content[0].text)
 
@@ -112,7 +112,7 @@ async def test_task_lifecycle_and_run_linkage(tmp_path, monkeypatch) -> None:
 
     rejected = await server.call_tool(
         "run_command",
-        {"target": "example", "command": "true", "task_id": created["id"]},
+        {"target": "example", "command": "true", "purpose": "Validate Task-linked execution continuity.", "task_id": created["id"]},
     )
     assert rejected[0].text == f"ERROR: task is archived: {created['id']}"
     assert len(server._run_store_instance.list()) == 1
@@ -131,7 +131,7 @@ async def test_unknown_task_rejects_execution_before_run_creation(tmp_path, monk
 
     rejected = await server.call_tool(
         "run_command",
-        {"target": "example", "command": "true", "task_id": "task-20260812T120000000000Z-123456789abc"},
+        {"target": "example", "command": "true", "purpose": "Validate rejection of an unknown Task link.", "task_id": "task-20260812T120000000000Z-123456789abc"},
     )
 
     assert rejected[0].text.startswith("ERROR: unknown task:")

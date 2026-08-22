@@ -28,7 +28,7 @@ One process owns configuration, target lookup, tool discovery and local state. H
 | Targets | Return safe target metadata and resolve one configured execution target. |
 | SSH execution | Run bounded non-interactive commands or interpreter input on configured targets. |
 | Managed tools | Discover approved metadata and execute only registered script IDs. |
-| Runs | Record technical execution state and ambiguous/interrupted outcomes. |
+| Runs | Record agent purpose, bounded technical result context and ambiguous/interrupted execution outcomes without persisting raw execution content. |
 | Tasks | Keep durable continuity only for work that needs recovery or handoff. |
 | Skills | Discover and retrieve read-only Agent Skills from configured sources. |
 | Candidates | Validate and durably mutate typed Candidate YAML state with revision CAS and per-Candidate locking when Candidate storage is configured. |
@@ -42,7 +42,7 @@ sequenceDiagram
     participant H as HATS
     participant S as Tool source
     participant T as Target
-    C->>H: run_script(script_id, target, arguments)
+    C->>H: run_script(script_id, target, purpose, arguments)
     H->>S: Resolve exact registered ID
     H->>H: Validate metadata, arguments, capabilities
     H->>T: Send script over bounded SSH stdin
@@ -101,7 +101,7 @@ The caller selects a configured target. Target configuration owns host, port, us
 
 SSH execution is non-interactive and uses strict host-key checking, key-only authentication, no PTY, no forwarding, bounded output, bounded timeout and no automatic retry.
 
-A failed or interrupted mutation can leave remote state ambiguous. HATS must report that ambiguity; it must not claim rollback or safe retry without evidence.
+A failed or interrupted mutation can leave remote state ambiguous. HATS must report that ambiguity; it must not claim rollback or safe retry without evidence. Persisted Run purpose explains why an agent execution exists, while the server-generated result summary provides only bounded allowlisted result metadata. Neither field weakens the existing ban on persisting raw command/script content, argument or environment values, or stdout/stderr text.
 
 ## Skills boundary
 

@@ -84,7 +84,7 @@ async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, mo
 
     content = await server.call_tool(
         "run_script",
-        {"script_id": "system.echo", "target": "example", "arguments": {"message": "hello world"}},
+        {"script_id": "system.echo", "target": "example", "purpose": "Validate managed script execution metadata.", "arguments": {"message": "hello world"}},
     )
     result = json.loads(content[0].text)
 
@@ -95,5 +95,10 @@ async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, mo
     assert captured["stdin_text"] == script_path.read_text(encoding="utf-8")
     assert captured["timeout_seconds"] == 15
     run = server._run_store_instance.get(result["run_id"])
+    raw = (tmp_path / "runs" / f"{run.id}.json").read_text(encoding="utf-8")
     assert run.may_mutate is False
     assert run.idempotent is True
+    assert run.purpose == "Validate managed script execution metadata."
+    assert run.argument_names == ["message"]
+    assert "hello world" not in raw
+    assert script_path.read_text(encoding="utf-8") not in raw

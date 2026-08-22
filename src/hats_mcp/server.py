@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 import mcp.types as types
 from mcp.server import Server
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .candidates import (
     CandidateOwnership,
@@ -23,7 +23,7 @@ from .config import HATSConfig, load_config
 from .execution import run_ssh
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .skills import HermesState, SkillRegistry, build_skill_registry, list_skill_files, read_skill_file
-from .runs import RunOperation, RunStatus, RunStore
+from .runs import PURPOSE_MAX_LENGTH, RunOperation, RunStatus, RunStore, normalize_run_purpose
 from .tasks import TaskContinuity, TaskStatus, TaskStore
 from .tooling_registry import ToolingRegistry
 
@@ -37,6 +37,28 @@ _skill_registry_cache_at = 0.0
 _skill_registry_cache_config: HATSConfig | None = None
 _skill_registry_lock = asyncio.Lock()
 SKILL_REGISTRY_CACHE_TTL_SECONDS = 60.0
+
+
+PURPOSE_DESCRIPTION = (
+    "Human-readable reason why this execution exists. Describe intent, not implementation: "
+    "do not include command text, shell/script bodies, argument values, environment values, "
+    "credentials, tokens, or other secrets. One printable line, 1..512 characters after trimming."
+)
+
+
+class AgentExecutionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: str = Field(
+        min_length=1,
+        max_length=PURPOSE_MAX_LENGTH,
+        description=PURPOSE_DESCRIPTION,
+    )
+
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def validate_purpose(cls, value: object) -> object:
+        return normalize_run_purpose(value)
 
 
 class EmptyInput(BaseModel):
@@ -67,7 +89,7 @@ class SkillReadFileInput(BaseModel):
     refresh: bool = False
 
 
-class CommandInput(BaseModel):
+class CommandInput(AgentExecutionInput):
     model_config = ConfigDict(extra="forbid")
 
     target: str = Field(min_length=1, max_length=63)
@@ -76,7 +98,7 @@ class CommandInput(BaseModel):
     task_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
-class ShellInput(BaseModel):
+class ShellInput(AgentExecutionInput):
     model_config = ConfigDict(extra="forbid")
 
     target: str = Field(min_length=1, max_length=63)
@@ -92,7 +114,7 @@ class GetScriptInput(BaseModel):
     script_id: str = Field(min_length=3, max_length=190)
 
 
-class RunScriptInput(BaseModel):
+class RunScriptInput(AgentExecutionInput):
     model_config = ConfigDict(extra="forbid")
 
     script_id: str = Field(min_length=3, max_length=190)
@@ -332,6 +354,7 @@ async def _tracked_ssh_run(
     connect_timeout_seconds: int,
     max_output_bytes: int,
     may_mutate: bool,
+    purpose: str,
     idempotent: bool | None = None,
     task_id: str | None = None,
     stdin_text: str | None = None,
@@ -353,6 +376,7 @@ async def _tracked_ssh_run(
         argument_names=argument_names,
         timeout_seconds=timeout_seconds,
         may_mutate=may_mutate,
+        purpose=purpose,
         idempotent=idempotent,
     )
     try:
@@ -639,8 +663,10 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_runs",
             description=(
-                "List persisted HATS execution records. Run records contain bounded metadata, "
-                "not command text, scripts, argument values or output content."
+                "List persisted HATS execution records with execution purpose and bounded result "
+                "summary when present. Historical records may return purpose=null and "
+                "result_summary=null. Run records never contain command text, scripts, argument "
+                "values, environment values or output content."
             ),
             inputSchema=ListRunsInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -652,7 +678,11 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get_run",
-            description="Return one persisted HATS execution record without execution content.",
+            description=(
+                "Return one persisted HATS execution record. New agent-initiated records include "
+                "purpose and a bounded server-generated result_summary; historical records may "
+                "return null for both. Raw execution content is never persisted."
+            ),
             inputSchema=GetRunInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=True,
@@ -759,7 +789,10 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="run_script",
             description=(
-                "Run one registered managed script on a compatible configured target. "
+                "Run one registered managed script on a compatible configured target. purpose "
+                "must explain why the execution exists, not repeat implementation details, and "
+                "must not contain commands, script bodies, argument values, environment values or "
+                "secrets; it is one printable line of at most 512 characters after trimming. "
                 "The caller supplies a script ID and typed argument object, never a filesystem "
                 "path, raw argv or arbitrary environment."
             ),
@@ -774,9 +807,12 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="run_command",
             description=(
-                "Run one non-interactive command on a configured target. The server enforces "
-                "strict host-key checking, key-only SSH, no forwarding, bounded output and "
-                "a bounded timeout. Commands are never retried automatically."
+                "Run one non-interactive command on a configured target. purpose must explain "
+                "why the execution exists, not repeat implementation details, and must not contain "
+                "command text, argument values, environment values or secrets; it is one printable "
+                "line of at most 512 characters after trimming. The server enforces strict host-key "
+                "checking, key-only SSH, no forwarding, bounded output and a bounded timeout. "
+                "Commands are never retried automatically."
             ),
             inputSchema=CommandInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -789,8 +825,11 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="run_shell",
             description=(
-                "Run bounded sh or bash input over SSH stdin on a configured target. Use this "
-                "for loops, here-documents or multi-step shell input. Scripts are never retried."
+                "Run bounded sh or bash input over SSH stdin on a configured target. purpose must "
+                "explain why the execution exists, not repeat implementation details, and must not "
+                "contain command text, shell/script bodies, argument values, environment values or "
+                "secrets; it is one printable line of at most 512 characters after trimming. Use "
+                "this for loops, here-documents or multi-step shell input. Scripts are never retried."
             ),
             inputSchema=ShellInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -1070,6 +1109,7 @@ async def call_tool(
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
                 may_mutate=script.metadata.mutating,
+                purpose=args.purpose,
                 idempotent=script.metadata.idempotent,
                 task_id=args.task_id,
                 stdin_text=script.content,
@@ -1101,6 +1141,7 @@ async def call_tool(
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
                 may_mutate=True,
+                purpose=args.purpose,
                 task_id=args.task_id,
             )
             result = {"run_id": run_id, "execution": execution}
@@ -1118,6 +1159,7 @@ async def call_tool(
                 connect_timeout_seconds=connect_timeout,
                 max_output_bytes=max_output,
                 may_mutate=True,
+                purpose=args.purpose,
                 task_id=args.task_id,
                 stdin_text=args.script,
             )

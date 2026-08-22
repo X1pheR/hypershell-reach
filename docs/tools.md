@@ -31,9 +31,10 @@ Inputs:
 
 - `script_id`
 - `target`
+- `purpose`
 - `arguments`
 
-The server resolves the exact registered script, validates arguments, checks required target capabilities and sends the script content over SSH stdin. The target does not need a repository checkout.
+The server resolves the exact registered script, validates arguments, checks required target capabilities and sends the script content over SSH stdin. The target does not need a repository checkout. `purpose` is required and describes why the execution exists; it is not a place for script content, argument values, environment values or secrets.
 
 The script-owned `timeout_seconds` cannot exceed the configured target maximum. Scripts are never retried automatically.
 
@@ -194,8 +195,10 @@ Transitions an approved Candidate to `implemented` or `automated` and requires a
 
 ### `run_command`
 
-Runs one non-interactive command on one configured target. The requested timeout cannot exceed the target maximum. Commands are never retried automatically.
+Runs one non-interactive command on one configured target. `purpose` is required and must explain why the execution exists without copying command text, argument values, environment values or secrets into persisted state. The requested timeout cannot exceed the target maximum. Commands are never retried automatically.
 
 ### `run_shell`
 
-Runs bounded `sh` or `bash` input over SSH stdin. Use it when a managed tool does not yet exist and the caller is authorized to use raw execution.
+Runs bounded `sh` or `bash` input over SSH stdin. `purpose` is required and must explain why the execution exists without copying command text, shell/script bodies, argument values, environment values or secrets into persisted state. Use this operation when a managed tool does not yet exist and the caller is authorized to use raw execution.
+
+For all three execution tools, purpose is normalized by trimming outer whitespace and must then contain 1 to 512 printable characters on one line. Historical Run v1 records can still be returned by `list_runs` and `get_run`; they expose `purpose: null` and `result_summary: null`. New Run v2 records receive a server-generated result summary bounded to 512 characters. See [Runs and tasks](runs-and-tasks.md) for the persisted safety and compatibility contract.

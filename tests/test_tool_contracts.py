@@ -56,3 +56,21 @@ def test_candidate_approval_tool_does_not_confuse_state_mechanics_with_authoriza
     description = tools["approve_candidate"].description.lower()
     assert "explicit operator authorization" in description
     assert "does not grant authorization" in description
+
+
+def test_execution_tools_require_bounded_purpose_with_safe_contract_guidance() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(list_tools())}
+
+    for name in ("run_command", "run_shell", "run_script"):
+        tool = tools[name]
+        schema = tool.inputSchema
+        purpose = schema["properties"]["purpose"]
+        assert "purpose" in schema["required"]
+        assert purpose["minLength"] == 1
+        assert purpose["maxLength"] == 512
+        assert "why" in tool.description.lower()
+        assert "secret" in tool.description.lower()
+        assert "512" in tool.description
+
+    assert "historical records may return" in tools["list_runs"].description.lower()
+    assert "historical records may" in tools["get_run"].description.lower()

@@ -4,7 +4,7 @@ Runs and tasks solve different problems.
 
 ## Runs
 
-A run is one technical execution attempt. HATS creates a run immediately before `run_command`, `run_shell` or `run_script` reaches the SSH execution boundary.
+A run is one technical execution attempt. HATS creates a run immediately before `run_command`, `run_shell` or `run_script` reaches the SSH execution boundary. New agent-initiated executions must provide a human-readable `purpose` that explains why the execution exists. Purpose is intentionally separate from the technical operation, target, managed-tool identity and execution result.
 
 ```mermaid
 flowchart LR
@@ -14,15 +14,32 @@ flowchart LR
     End --> Result[Return run_id and execution result]
 ```
 
-Run records contain execution metadata only. They never persist:
+Run records contain bounded execution metadata only. They never persist:
 
 - command text;
 - shell or managed script content;
 - argument values;
+- environment values;
 - stdout or stderr text;
 - target addresses, users or credential paths.
 
-A run can contain script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency and output byte/truncation counters. Compact run listings expose both `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because HATS cannot infer repeat safety from arbitrary caller input.
+A run can contain purpose, script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency, output byte/truncation counters and a bounded `result_summary`. Compact run listings expose purpose, result summary, `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because HATS cannot infer repeat safety from arbitrary caller input.
+
+### Purpose contract
+
+`purpose` answers **why** the execution exists. It must not repeat command text, shell/script bodies, argument values, environment values, credentials, tokens or other secrets. Agent-facing execution tools require it as one printable line of 1 to 512 characters after outer whitespace is trimmed. Invalid or oversized purpose is rejected rather than truncated.
+
+Internal RunStore callers may omit purpose when no agent intent exists. Historical Run v1 records therefore remain meaningful with `purpose: null`; HATS never invents purpose text for them.
+
+### Result summary contract
+
+`result_summary` is server-generated result/diagnostic context, not caller-supplied log storage. It is built only from allowlisted metadata already inside the Run safety boundary: terminal status, exit code, configured timeout, ambiguity classification, stdout/stderr byte counts and truncation flags, or a bounded internal error type. It never includes command text, script content, argument values, environment values, or stdout/stderr content.
+
+A persisted result summary is one printable line with a hard maximum of 512 characters. HATS deterministically truncates an internally generated summary that would exceed the limit and appends ` [truncated]`; persisted values beyond the schema bound are rejected. This does not create a second receipt, log or artifact repository: the Run remains the execution receipt.
+
+### Schema compatibility
+
+New Run writes use schema v2. The reader accepts both Run v1 and v2, so mixed historical/new stores require no bulk migration. Run v1 has no purpose or result summary; read APIs project those fields as `null` without rewriting the historical file. If an unrelated mutation such as a retention override rewrites a v1 record, it remains schema v1 and the new fields are still omitted.
 
 ### States
 

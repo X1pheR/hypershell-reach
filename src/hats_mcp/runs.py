@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 RunStatus = Literal[
     "running",
@@ -25,6 +25,78 @@ RunOperation = Literal["run_command", "run_shell", "run_script"]
 _RUN_ID = re.compile(r"^run-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _TERMINAL_CLEANUP_STATUSES = {"succeeded", "remote_error", "transport_error", "timeout", "local_error"}
 _AMBIGUOUS_STATUSES = {"transport_error", "timeout", "interrupted", "unknown"}
+RUN_SCHEMA_VERSION = 2
+PURPOSE_MAX_LENGTH = 512
+RESULT_SUMMARY_MAX_LENGTH = 512
+RESULT_SUMMARY_TRUNCATION_SUFFIX = " [truncated]"
+
+
+def normalize_run_purpose(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("purpose must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("purpose must not be empty")
+    if len(normalized) > PURPOSE_MAX_LENGTH:
+        raise ValueError(f"purpose must be at most {PURPOSE_MAX_LENGTH} characters")
+    if not normalized.isprintable():
+        raise ValueError("purpose must be a single printable line")
+    return normalized
+
+
+def _bounded_result_summary(value: str) -> str:
+    if len(value) <= RESULT_SUMMARY_MAX_LENGTH:
+        return value
+    keep = RESULT_SUMMARY_MAX_LENGTH - len(RESULT_SUMMARY_TRUNCATION_SUFFIX)
+    return value[:keep] + RESULT_SUMMARY_TRUNCATION_SUFFIX
+
+
+def _stream_metadata(execution: dict[str, Any]) -> str:
+    stdout = execution.get("stdout") if isinstance(execution.get("stdout"), dict) else {}
+    stderr = execution.get("stderr") if isinstance(execution.get("stderr"), dict) else {}
+    return (
+        f"Output content was not persisted; observed stdout_bytes={stdout.get('bytes')}, "
+        f"stderr_bytes={stderr.get('bytes')}, stdout_truncated={stdout.get('truncated')}, "
+        f"stderr_truncated={stderr.get('truncated')}."
+    )
+
+
+def _execution_result_summary(record: "RunRecord", execution: dict[str, Any]) -> str:
+    status = execution.get("status")
+    exit_code = execution.get("exit_code")
+    if status == "succeeded":
+        lead = f"Execution succeeded with exit_code={exit_code}."
+    elif status == "remote_error":
+        lead = f"Remote execution failed with exit_code={exit_code}."
+    elif status == "transport_error":
+        lead = "SSH transport failed before a trustworthy remote result was available."
+    elif status == "timeout":
+        lead = f"Execution timed out after {record.timeout_seconds} seconds."
+    else:
+        lead = f"Execution ended with status={status}."
+    ambiguity = (
+        " A mutating operation may have an ambiguous outcome."
+        if record.may_mutate and status in _AMBIGUOUS_STATUSES
+        else ""
+    )
+    return _bounded_result_summary(f"{lead} {_stream_metadata(execution)}{ambiguity}")
+
+
+def _internal_result_summary(record: "RunRecord", status: str, error_type: str) -> str:
+    if status == "local_error":
+        lead = f"Execution failed locally before a remote result ({error_type})."
+    elif status == "interrupted":
+        lead = f"Execution was interrupted ({error_type})."
+    else:
+        lead = f"Execution outcome is unknown ({error_type})."
+    ambiguity = (
+        " A mutating operation may have an ambiguous outcome."
+        if record.may_mutate and status in _AMBIGUOUS_STATUSES
+        else ""
+    )
+    return _bounded_result_summary(
+        f"{lead} No command, script, argument values, environment values, or output content were persisted.{ambiguity}"
+    )
 
 
 def utc_now() -> datetime:
@@ -47,10 +119,12 @@ def new_run_id(now: datetime | None = None) -> str:
 class RunRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = RUN_SCHEMA_VERSION
     id: str
     operation: RunOperation
     target: str
+    purpose: str | None = Field(default=None, min_length=1, max_length=PURPOSE_MAX_LENGTH, strict=True)
+    result_summary: str | None = Field(default=None, max_length=RESULT_SUMMARY_MAX_LENGTH, strict=True)
     task_id: str | None = None
     script_id: str | None = None
     script_source: str | None = None
@@ -73,11 +147,34 @@ class RunRecord(BaseModel):
     stderr_truncated: bool | None = None
     error_type: str | None = Field(default=None, max_length=200)
 
+    @field_validator("purpose", mode="before")
+    @classmethod
+    def validate_purpose(cls, value: object) -> object:
+        if value is None:
+            return None
+        return normalize_run_purpose(value)
+
+    @field_validator("result_summary")
+    @classmethod
+    def validate_result_summary(cls, value: str | None) -> str | None:
+        if value is not None and (not value or not value.isprintable()):
+            raise ValueError("result_summary must be one printable line when present")
+        return value
+
+    @model_validator(mode="after")
+    def validate_schema_fields(self) -> "RunRecord":
+        if self.schema_version == 1 and (self.purpose is not None or self.result_summary is not None):
+            raise ValueError("Run schema v1 cannot contain purpose or result_summary")
+        return self
+
     def summary(self) -> dict[str, object]:
         return {
+            "schema_version": self.schema_version,
             "id": self.id,
             "operation": self.operation,
             "target": self.target,
+            "purpose": self.purpose,
+            "result_summary": self.result_summary,
             "task_id": self.task_id,
             "script_id": self.script_id,
             "may_mutate": self.may_mutate,
@@ -120,7 +217,11 @@ class RunStore:
         self._require_writable()
         path = self._path(record.id)
         temporary = self.root / f".{record.id}.{uuid4().hex}.tmp"
-        payload = json.dumps(record.model_dump(), indent=2, sort_keys=True) + "\n"
+        serialized = record.model_dump()
+        if record.schema_version == 1:
+            serialized.pop("purpose", None)
+            serialized.pop("result_summary", None)
+        payload = json.dumps(serialized, indent=2, sort_keys=True) + "\n"
         try:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -148,6 +249,7 @@ class RunStore:
         target: str,
         timeout_seconds: int,
         may_mutate: bool,
+        purpose: str | None = None,
         idempotent: bool | None = None,
         task_id: str | None = None,
         script_id: str | None = None,
@@ -157,9 +259,11 @@ class RunStore:
     ) -> RunRecord:
         now = self._now()
         record = RunRecord(
+            schema_version=RUN_SCHEMA_VERSION,
             id=new_run_id(now),
             operation=operation,
             target=target,
+            purpose=purpose,
             task_id=task_id,
             script_id=script_id,
             script_source=script_source,
@@ -229,6 +333,11 @@ class RunStore:
                 "stderr_bytes": stderr.get("bytes"),
                 "stdout_truncated": stdout.get("truncated"),
                 "stderr_truncated": stderr.get("truncated"),
+                "result_summary": (
+                    _execution_result_summary(record, execution)
+                    if record.schema_version == RUN_SCHEMA_VERSION
+                    else record.result_summary
+                ),
             }
         )
         self._atomic_write(updated)
@@ -253,12 +362,18 @@ class RunStore:
         record = self.get(run_id)
         if record.status != "running":
             return record
+        safe_error_type = error_type[:200]
         updated = record.model_copy(
             update={
                 "ended_at": format_timestamp(self._now()),
                 "status": status,
                 "ambiguous": bool(record.may_mutate and status in _AMBIGUOUS_STATUSES),
-                "error_type": error_type[:200],
+                "error_type": safe_error_type,
+                "result_summary": (
+                    _internal_result_summary(record, status, safe_error_type)
+                    if record.schema_version == RUN_SCHEMA_VERSION
+                    else record.result_summary
+                ),
             }
         )
         self._atomic_write(updated)
