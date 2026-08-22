@@ -136,3 +136,81 @@ async def test_unknown_task_rejects_execution_before_run_creation(tmp_path, monk
 
     assert rejected[0].text.startswith("ERROR: unknown task:")
     assert server._run_store_instance.list() == []
+
+
+@pytest.mark.asyncio
+async def test_update_task_expected_revision_rejects_stale_caller(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_task_store_instance", TaskStore(config.workspace.tasks, config.workspace.trash))
+
+    created_content = await server.call_tool(
+        "create_task", {"title": "CAS", "objective": "Expose revision CAS through MCP."}
+    )
+    created = json.loads(created_content[0].text)
+    updated_content = await server.call_tool(
+        "update_task",
+        {"task_id": created["id"], "expected_revision": 1, "title": "Committed"},
+    )
+    updated = json.loads(updated_content[0].text)
+    assert updated["revision"] == 2
+
+    stale = await server.call_tool(
+        "update_task",
+        {"task_id": created["id"], "expected_revision": 1, "title": "Lost update"},
+    )
+    assert stale[0].text.startswith("ERROR: stale task revision:")
+
+
+@pytest.mark.asyncio
+async def test_close_task_is_explicit_single_boundary_and_retry_is_idempotent(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_task_store_instance", TaskStore(config.workspace.tasks, config.workspace.trash))
+
+    created_content = await server.call_tool(
+        "create_task", {"title": "Close", "objective": "Close with one MCP call."}
+    )
+    created = json.loads(created_content[0].text)
+    arguments = {
+        "task_id": created["id"],
+        "expected_revision": 1,
+        "status": "completed",
+        "clear_next_action": True,
+    }
+    closed_content = await server.call_tool("close_task", arguments)
+    closed = json.loads(closed_content[0].text)
+    repeated_content = await server.call_tool("close_task", arguments)
+    repeated = json.loads(repeated_content[0].text)
+
+    assert closed == repeated
+    assert closed["revision"] == 2
+    assert closed["status"] == "completed"
+    assert closed["archived_at"] is not None
+    assert not (tmp_path / "tasks" / created["id"]).exists()
+    assert (tmp_path / "trash" / created["id"] / "task.yaml").is_file()
+
+
+def test_server_task_store_repairs_terminal_residue_on_initialization(tmp_path, monkeypatch) -> None:
+    import yaml
+
+    config = _config(tmp_path)
+    writable = TaskStore(config.workspace.tasks, config.workspace.trash)
+    created = writable.create(title="Residue", objective="Recover at server startup.")
+    path = tmp_path / "tasks" / created.id / "task.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    payload.update(
+        status="completed",
+        revision=2,
+        archived_at="2026-08-22T13:00:00.000000Z",
+        updated_at="2026-08-22T13:00:00.000000Z",
+    )
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_task_store_instance", None)
+    initialized = server._task_store()
+
+    assert initialized.get(created.id).status == "completed"
+    assert not (tmp_path / "tasks" / created.id).exists()
+    assert (tmp_path / "trash" / created.id / "task.yaml").is_file()

@@ -25,7 +25,7 @@ workspace:
   candidates: /var/lib/hats/candidates  # optional until the deployment migration gate
 ```
 
-All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata; `tasks` and `trash` are reserved for task continuity. `candidates`, when configured, stores one HATS-owned `candidate-v1` YAML record per Candidate. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
+All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata. `tasks` is the active Task root and `trash` is the backward-compatible configuration key for the Task archive root. New Task records use the Task v2 contract; existing Task v1 YAML remains readable. `candidates`, when configured, stores one HATS-owned `candidate-v1` YAML record per Candidate. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
 
 ## Retention
 
@@ -37,7 +37,7 @@ retention:
     archived_days: null
 ```
 
-`null` disables automatic cleanup. Run cleanup never removes ambiguous, interrupted, unknown or explicitly retained records. Task cleanup is added with the task lifecycle.
+`null` disables automatic cleanup. Run cleanup never removes ambiguous, interrupted, unknown or explicitly retained records. Task cleanup considers only terminal records already present in the Task archive root with a valid `archived_at`, `retained=false`, and an age beyond `retention.tasks.archived_days`. Active, partial and blocked Tasks are never retention candidates.
 
 ## Execution defaults
 

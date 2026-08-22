@@ -53,7 +53,7 @@ On startup, HATS changes stale `running` records to `interrupted`. This records 
 
 ## Tasks
 
-A task is durable continuity state for work that would be difficult to reconstruct after interruption or handoff. Ordinary commands and straightforward reproducible changes do not need a task.
+A Task is durable continuity state for work that would be difficult to reconstruct after interruption or handoff. Ordinary commands and straightforward reproducible changes do not need a Task. A Task is not authorization and is not a project-management record.
 
 ```mermaid
 flowchart LR
@@ -62,45 +62,69 @@ flowchart LR
     Task --> R3[Run]
 ```
 
-A task is not the same as a project. One project can use zero or more tasks, and a task can exist without a project.
+Runs persist `task_id`; Tasks do not persist a backlink list. Reverse Task-to-Run views are therefore derived from Run records.
 
-Task state is stored as:
+### Storage and schema
+
+The active and archive roots are configured independently through the backward-compatible `workspace.tasks` and `workspace.trash` keys. A deployment may bind them to paths such as:
 
 ```text
-tasks/<task-id>/
-├── task.yaml
-└── evidence/
+appdata/hats/tasks/
+├── active/
+│   ├── .locks/
+│   └── <task-id>/task.yaml
+└── archive/
+    └── <task-id>/task.yaml
 ```
 
-`task.yaml` keeps the compact task identity and one replaceable `continuity` snapshot. The snapshot can hold bounded authorization context, authoritative sources, completed material work, validation, cleanup, recovery, blockers and material assumptions. Each assumption records its statement, evidence class, impact if wrong and bounded decision. This is intended for safe resume or handoff, not command history or project management.
+`.locks/` is store metadata, not Task state. New Tasks do not create `evidence/` directories. Task YAML never persists physical storage paths, secrets, or Run backlinks.
 
-`update_task` replaces the supplied continuity snapshot rather than accumulating checkpoints. This keeps current state compact and lets callers remove obsolete handoff information deliberately. Older v1 task records without `continuity` remain valid and load with an empty snapshot.
+Task v2 adds a monotonic `revision`; new records start at revision `1`. Existing Task v1 records remain readable without being rewritten and are projected as revision `0` in memory. The first successful mutation of a v1 record writes Task v2 and advances its revision. Unknown persisted fields fail validation.
 
-HATS creates the evidence directory as a bounded place for deployment-specific evidence workflows. The v1 MCP surface does not provide an arbitrary evidence-file writer.
+The `continuity` snapshot remains bounded and replaceable. It can hold authorization context, authoritative sources, completed material work, validation, cleanup, recovery, blockers and material assumptions. It is intended for safe resume or handoff, not command history.
 
-Task states are `active`, `partial`, `blocked`, `completed` and `cancelled`. Only the first three accept new linked runs. Terminal task state cannot be reopened through `update_task`.
+### Mutation concurrency and durability
 
-Task tools:
+Task mutations use a narrowly scoped per-Task interprocess lock. `expected_revision` provides compare-and-swap semantics for callers that perform read-modify-write operations: a stale revision is rejected and cannot overwrite a newer committed Task state. The field remains optional on `update_task` and `close_task` for compatibility with the pre-v2 MCP input contract; compatibility calls are still serialized and apply typed partial mutations rather than arbitrary document replacement.
 
-- `list_tasks` returns current tasks and can optionally include archived tasks;
-- `get_task` returns one current or archived task;
-- `create_task` creates continuity state without executing remotely;
-- `update_task` changes current task metadata or state;
-- `archive_task` moves a completed or cancelled task to the configured trash root.
+Every Task YAML mutation writes a complete validated record to a temporary file inside the same Task directory, fsyncs the file, atomically replaces `task.yaml`, and fsyncs the containing directory. Creation additionally fsyncs the active root. A close writes and fsyncs the final terminal record before the directory move, then atomically moves the Task directory on the same filesystem and fsyncs both active and archive roots. Malformed Task-shaped filesystem entries and duplicate Task IDs across roots fail safe.
 
-Archival is an atomic same-filesystem directory move. A repeated archive call is idempotent. HATS does not expose a hard-delete task tool.
+### States and closure
+
+Task states are `active`, `partial`, `blocked`, `completed` and `cancelled`. Only `active`, `partial` and `blocked` may remain in the active Task root after normal operation or startup recovery. Only open Tasks accept new linked Runs.
+
+`close_task` is the explicit terminal boundary. It owns the status transition, final metadata update, durable Task record and active-to-archive move. For backward compatibility, `update_task` with `status=completed|cancelled` enters the same close boundary, and `archive_task` remains an idempotent compatibility helper for already-terminal callers. A successful close therefore never requires a second caller-controlled step.
+
+A retry of the same close request returns the committed archived record without incrementing the revision again. If the final terminal YAML committed but the directory move was interrupted, retry completes the move. If the rename committed but root-directory fsync failed, retry re-establishes the required fsync boundary. Conflicting terminal outcomes fail rather than silently rewriting final state.
+
+On writable server startup HATS runs Task repair before retention. Terminal residue in the active root is completed into the archive root; `active`, `partial` and `blocked` records are not moved. Duplicate IDs or malformed records stop repair rather than guessing.
+
+### Task tools
+
+- `list_tasks` returns bounded current Tasks and can optionally include archived Tasks.
+- `get_task` returns one current or archived Task.
+- `create_task` creates Task v2 continuity state without executing remotely.
+- `update_task` applies a typed partial update and supports `expected_revision` CAS. A terminal status uses the close boundary.
+- `close_task` atomically closes and archives a Task from the caller perspective.
+- `archive_task` is retained for backward compatibility with the former two-step lifecycle.
 
 ## Retention
 
 Retention is configuration-driven and disabled by default.
 
-A completed run can be deleted automatically only when all conditions are true:
+A completed Run can be deleted automatically only when all conditions are true:
 
 - it has a cleanup-eligible terminal state;
 - it is older than `retention.runs.completed_days`;
 - `ambiguous=false`;
 - `retained=false`.
 
-`running`, `interrupted`, `unknown` and ambiguous records are never removed by run cleanup.
+`running`, `interrupted`, `unknown` and ambiguous Run records are never removed by Run cleanup.
 
-Archived task cleanup applies only when `retention.tasks.archived_days` is set, the task is terminal, `retained=false` and `archived_at` is older than the threshold. Current tasks are never deleted by task cleanup.
+Task retention considers only records physically present in the archive root. A Task can be deleted only when it is terminal, has a valid `archived_at`, has `retained=false`, and is older than `retention.tasks.archived_days`. `active`, `partial` and `blocked` Tasks are never deleted by Task retention, even if they are old or misplaced.
+
+## Task storage migration
+
+The public migration helper implements the copy-and-validate portion of a governed deployment migration. It computes a deterministic source preimage, validates record counts and duplicate IDs, byte-copies Task YAML, routes terminal active residue into the target archive, omits only empty legacy `evidence/` directories, preserves and reports every non-empty legacy `evidence/` tree, revalidates the unchanged source, and validates the target before reporting `switch_ready=true`.
+
+It never edits deployment configuration, retires the source roots, or performs a live switch. The deployment gate must quiesce writers, establish the exact preimage, run copy/validate, change the configured roots, start the compatible HATS build against the target roots, validate Task and Run relationships, and keep the legacy source roots available until rollback is no longer required. See [Task storage migration](task-storage-migration.md).
