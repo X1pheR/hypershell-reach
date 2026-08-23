@@ -48,7 +48,31 @@ def test_browser_container_matches_reviewed_playwright_runtime() -> None:
     assert '-v "${ROOT_DIR}:/src:ro"' not in BROWSER
     assert 'docker cp "${ROOT_DIR}/tests/test_browser.py"' in BROWSER
     assert '"playwright==1.62.0"' in BROWSER
-    assert "playwright/python@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d" in BROWSER
+    assert "playwright/python:v1.62.0-noble" in BROWSER
     assert '"axe-playwright-python==0.1.8"' in BROWSER
     for package_name in ("pytest", "pytest-asyncio", "pytest-playwright"):
         assert f'"{package_name}=={_locked_version(package_name)}"' in BROWSER
+
+
+def test_browser_gate_prevents_parallel_local_runs() -> None:
+    assert 'BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/hats-ci-browser.lock}"' in BROWSER
+    assert 'flock -n 9' in BROWSER
+    assert 'Another HATS browser acceptance run is already active' in BROWSER
+
+
+def test_browser_gate_has_a_hard_test_timeout() -> None:
+    assert 'BROWSER_RUN_TIMEOUT_SECONDS="${BROWSER_RUN_TIMEOUT_SECONDS:-600}"' in BROWSER
+    assert 'BROWSER_TEST_TIMEOUT_SECONDS="${BROWSER_TEST_TIMEOUT_SECONDS:-300}"' in BROWSER
+    assert 'timeout --signal=TERM --kill-after=30s "${BROWSER_RUN_TIMEOUT_SECONDS}"' in BROWSER
+    assert 'timeout --signal=TERM --kill-after=30s "${BROWSER_TEST_TIMEOUT_SECONDS}"' in BROWSER
+
+
+def test_browser_results_are_isolated_per_run() -> None:
+    assert 'BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"' in BROWSER
+    assert 'APP_LOG="${BROWSER_RESULTS_DIR}/hats-ui.log"' in BROWSER
+    assert 'rm -rf "${BROWSER_RESULTS_DIR:?}"/*' not in BROWSER
+
+
+def test_browser_runtime_uses_release_tag_not_digest() -> None:
+    assert 'PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python:v1.62.0-noble"' in BROWSER
+    assert 'playwright/python@sha256:' not in BROWSER
