@@ -40,7 +40,7 @@ The UI does not display tool source code or deployment filesystem paths.
 
 Tooling candidates are recurring gaps recorded for possible reusable automation. A candidate is **not** automatically an executable tool. It still needs normal review and implementation before it can become a managed tool.
 
-Keeping candidates beside Managed tools shows what may be automated next without creating a separate product area.
+Keeping candidates beside Managed tools shows what may be automated next without creating a separate product area. When structured Candidate storage is configured, each Candidate can open a read-only detail page showing its problem, proposal, safety boundary, ownership, acceptance contract and promotion state. Existing implementation Task and final managed-tool references link to their exact detail pages.
 
 ## Runs
 
@@ -53,13 +53,15 @@ A Run is the stored summary of one HATS execution attempt. The Runs view helps a
 - when it started and ended;
 - whether the record is retained.
 
+Each Run opens a read-only detail page. For current records it shows the human-readable purpose separately from the technical operation or managed tool, plus target, status, timing, bounded result summary and secret-safe diagnostics. When a Run has a `task_id`, the Task reference links back to the exact Task detail page. Historical Runs without purpose remain readable and are labelled accordingly.
+
 HATS does not persist command bodies, argument values or command output in the Run record, so the Web UI cannot expose them later.
 
 ## Tasks
 
 A Task keeps continuity for substantial work that may span sessions or be interrupted. It is not a project-management system and it does not grant permission to perform changes.
 
-The Tasks view intentionally shows only task ID, title, state, update time and retention state. The full continuity snapshot can contain operational context that does not belong in the browser UI.
+The Tasks list remains compact, while each Task opens a read-only detail page containing the complete safe continuity record: objective, project reference, lifecycle state, next action, authorization, sources, completed work, validation, cleanup, recovery, blockers and assumptions. Its **Related Runs** section is derived from `Run.task_id`, presents execution purpose first and links to each exact Run. Tasks do not persist a reverse Run backlink list.
 
 ## Skills
 
@@ -86,7 +88,7 @@ The UI does not render:
 - credential paths or secret values;
 - managed-tool source code;
 - command text, argument values or command output;
-- full Task continuity state.
+- unrestricted or secret-bearing Task content outside the bounded Task continuity schema.
 
 Authentication, TLS, DNS and ingress policy are deployment concerns outside the generic HATS product.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 from urllib.parse import urlencode
@@ -45,6 +46,12 @@ _ASSET_HEADERS = {
 _SUCCESS_STATES = {"succeeded", "success", "completed", "enabled", "ready"}
 _WARNING_STATES = {"running", "partial", "blocked", "waiting", "unknown", "observed"}
 _ERROR_STATES = {"failed", "error", "remote_error", "transport_error", "timeout", "local_error", "interrupted"}
+
+
+@dataclass(frozen=True)
+class _Link:
+    href: str
+    label: str
 
 
 def _brand() -> str:
@@ -151,6 +158,8 @@ def _status_class(value: str) -> str:
 
 
 def _value(key: str, value: Any) -> str:
+    if isinstance(value, _Link):
+        return f'<a href="{escape(value.href)}">{escape(value.label)}</a>'
     if value is None or value == "":
         return '<span class="muted">—</span>'
     if isinstance(value, bool):
@@ -178,6 +187,8 @@ def _table_query(request: Request, updates: dict[str, str | int | None]) -> str:
 
 
 def _search_value(value: Any) -> str:
+    if isinstance(value, _Link):
+        return value.label
     if isinstance(value, (list, tuple, set)):
         return " ".join(str(item) for item in value)
     return "" if value is None else str(value)
@@ -361,6 +372,28 @@ def _panel(title: str, description: str, content: str, *, element_id: str | None
         f'<div class="section-heading"><div><h2>{escape(title)}</h2><p>{escape(description)}</p></div></div>'
         f"{content}</section>"
     )
+
+
+def _details(items: Sequence[tuple[str, str, Any]]) -> str:
+    body = "".join(
+        f'<div class="detail-item"><dt>{escape(label)}</dt><dd>{_value(key, value)}</dd></div>'
+        for key, label, value in items
+    )
+    return f'<dl class="detail-grid">{body}</dl>'
+
+
+def _text_list(items: Sequence[Any], *, empty: str = "None recorded.") -> str:
+    if not items:
+        return f'<p class="muted">{escape(empty)}</p>'
+    return '<ul class="detail-list">' + "".join(f'<li>{escape(str(item))}</li>' for item in items) + '</ul>'
+
+
+def _mapping_table(rows: Sequence[dict[str, Any]], columns: Sequence[tuple[str, str]]) -> str:
+    return _table(columns, rows)
+
+
+def _error_page(title: str, message: str, *, status_code: int = 404) -> Response:
+    return PlainTextResponse(message, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 def _docs_navigation(active_page: DocumentationPage) -> str:
@@ -555,6 +588,14 @@ def create_app(config: HATSConfig) -> Starlette:
         except (OSError, RuntimeError, ValueError):
             return '<div class="notice error" role="alert">Tooling candidates are temporarily unavailable.</div>'
         notice = "" if configured else '<div class="notice">No tooling registry is configured.</div>'
+        linked_rows: list[dict[str, Any]] = []
+        for row in rows:
+            linked = dict(row)
+            if row.get("structured"):
+                candidate_id = str(row["id"])
+                linked["title"] = _Link(f"/candidates/{candidate_id}", str(row["title"]))
+                linked["id"] = _Link(f"/candidates/{candidate_id}", candidate_id)
+            linked_rows.append(linked)
         return notice + _table(
             (
                 ("title", "Title"),
@@ -562,7 +603,7 @@ def create_app(config: HATSConfig) -> Starlette:
                 ("promotion_reason", "Promotion reason"),
                 ("id", "ID"),
             ),
-            rows,
+            linked_rows,
             request=request,
             prefix="candidates",
             search_fields=("title", "status", "promotion_reason", "id"),
@@ -573,8 +614,15 @@ def create_app(config: HATSConfig) -> Starlette:
         )
 
     def tooling(request: Request) -> Response:
+        def managed_rows() -> list[dict[str, Any]]:
+            rows = model.tooling()
+            for row in rows:
+                tool_id = str(row["id"])
+                row["id"] = _Link(f"/tooling/{tool_id}", tool_id)
+            return rows
+
         managed = _safe_table(
-            model.tooling,
+            managed_rows,
             (
                 ("name", "Name"),
                 ("domain", "Domain"),
@@ -607,8 +655,18 @@ def create_app(config: HATSConfig) -> Starlette:
         return _page("Tooling", "See reusable tools and gaps being considered for automation.", content, active="/tooling")
 
     def runs(request: Request) -> Response:
+        def run_rows() -> list[dict[str, Any]]:
+            rows = model.run_summaries()
+            for row in rows:
+                run_id = str(row["id"])
+                row["id"] = _Link(f"/runs/{run_id}", run_id)
+                if row.get("task_id"):
+                    task_id = str(row["task_id"])
+                    row["task_id"] = _Link(f"/tasks/{task_id}", task_id)
+            return rows
+
         content = _safe_table(
-            model.run_summaries,
+            run_rows,
             (
                 ("id", "Run"),
                 ("status", "Status"),
@@ -637,8 +695,15 @@ def create_app(config: HATSConfig) -> Starlette:
         )
 
     def tasks(_: Request) -> Response:
+        def task_rows() -> list[dict[str, Any]]:
+            rows = model.task_summaries()
+            for row in rows:
+                task_id = str(row["id"])
+                row["id"] = _Link(f"/tasks/{task_id}", task_id)
+            return rows
+
         content = _safe_table(
-            model.task_summaries,
+            task_rows,
             (
                 ("id", "Task"),
                 ("title", "Title"),
@@ -653,6 +718,284 @@ def create_app(config: HATSConfig) -> Starlette:
             _panel("Task records", "Current HATS task summaries.", content),
             active="/tasks",
         )
+
+    def tool_detail(request: Request) -> Response:
+        tool_id = request.path_params["tool_id"]
+        try:
+            record = model.tool(tool_id)
+        except ValueError:
+            return _error_page("Tool not found", "Tool not found.")
+        except (OSError, RuntimeError):
+            return _error_page("Tool unavailable", "Tool detail is temporarily unavailable.", status_code=503)
+        arguments = list(record.get("arguments") or [])
+        argument_rows = [
+            {
+                "name": item.get("name"),
+                "type": item.get("type"),
+                "required": item.get("required"),
+                "description": item.get("description"),
+            }
+            for item in arguments
+        ]
+        content = '<div class="section-stack">' + _panel(
+            "Tool contract",
+            "Stable managed-tool identity and safe execution metadata.",
+            _details(
+                (
+                    ("id", "ID", record.get("id")),
+                    ("name", "Name", record.get("name")),
+                    ("description", "Description", record.get("description")),
+                    ("domain", "Domain", record.get("domain")),
+                    ("source", "Source", record.get("source")),
+                    ("interpreter", "Interpreter", record.get("interpreter")),
+                    ("requires", "Requires", record.get("requires")),
+                    ("mutating", "Mutating", record.get("mutating")),
+                    ("idempotent", "Idempotent", record.get("idempotent")),
+                    ("timeout_seconds", "Timeout (s)", record.get("timeout_seconds")),
+                    ("sha256", "SHA-256", record.get("sha256")),
+                    ("bytes", "Bytes", record.get("bytes")),
+                )
+            ),
+        ) + _panel(
+            "Arguments",
+            "Declared argument names and types only. Runtime values are never shown here.",
+            _mapping_table(argument_rows, (("name", "Name"), ("type", "Type"), ("required", "Required"), ("description", "Description"))),
+        ) + '</div>'
+        return _page(str(record.get("name") or tool_id), "Managed tool detail.", content, active="/tooling")
+
+    def run_detail(request: Request) -> Response:
+        run_id = request.path_params["run_id"]
+        try:
+            record = model.run(run_id)
+        except ValueError:
+            return _error_page("Run not found", "Run not found.")
+        except (OSError, RuntimeError):
+            return _error_page("Run unavailable", "Run detail is temporarily unavailable.", status_code=503)
+
+        purpose = record.get("purpose")
+        purpose_content = (
+            f'<p class="detail-prose">{escape(str(purpose))}</p>'
+            if purpose
+            else '<div class="notice">Purpose is unavailable for this historical run.</div>'
+        )
+        script_id = record.get("script_id")
+        script_value: Any = (
+            _Link(f"/tooling/{script_id}", str(script_id)) if script_id else None
+        )
+        task_id = record.get("task_id")
+        task_value: Any = _Link(f"/tasks/{task_id}", str(task_id)) if task_id else None
+        result_summary = record.get("result_summary")
+        result_content = (
+            f'<p class="detail-prose">{escape(str(result_summary))}</p>'
+            if result_summary
+            else '<div class="notice">A bounded result summary is unavailable for this historical run.</div>'
+        )
+        content = '<div class="section-stack">' + _panel(
+            "Purpose",
+            "Human-readable reason for the execution.",
+            purpose_content,
+        ) + _panel(
+            "Execution",
+            "Technical operation, target and associated continuity context.",
+            _details(
+                (
+                    ("id", "Run", record.get("id")),
+                    ("operation", "Operation", record.get("operation")),
+                    ("script_id", "Managed tool", script_value),
+                    ("target", "Target", record.get("target")),
+                    ("status", "Status", record.get("status")),
+                    ("task_id", "Task", task_value),
+                    ("started_at", "Started", record.get("started_at")),
+                    ("ended_at", "Ended", record.get("ended_at")),
+                )
+            ),
+        ) + _panel(
+            "Result summary",
+            "Bounded server-generated outcome. Raw command, arguments and output content are not persisted.",
+            result_content,
+        ) + _panel(
+            "Diagnostics",
+            "Bounded secret-safe execution metadata only.",
+            _details(
+                (
+                    ("timeout_seconds", "Timeout (s)", record.get("timeout_seconds")),
+                    ("exit_code", "Exit code", record.get("exit_code")),
+                    ("timed_out", "Timed out", record.get("timed_out")),
+                    ("duration_ms", "Duration (ms)", record.get("duration_ms")),
+                    ("stdout_bytes", "Stdout bytes", record.get("stdout_bytes")),
+                    ("stderr_bytes", "Stderr bytes", record.get("stderr_bytes")),
+                    ("stdout_truncated", "Stdout truncated", record.get("stdout_truncated")),
+                    ("stderr_truncated", "Stderr truncated", record.get("stderr_truncated")),
+                    ("error_type", "Error type", record.get("error_type")),
+                    ("ambiguous", "Ambiguous outcome", record.get("ambiguous")),
+                    ("may_mutate", "May mutate", record.get("may_mutate")),
+                    ("idempotent", "Idempotent", record.get("idempotent")),
+                    ("retained", "Retained", record.get("retained")),
+                )
+            ),
+        ) + '</div>'
+        return _page(run_id, "Execution detail without raw command, argument values or output content.", content, active="/runs")
+
+    def task_detail(request: Request) -> Response:
+        task_id = request.path_params["task_id"]
+        try:
+            record = model.task(task_id)
+            related = model.related_run_summaries(task_id)
+        except ValueError:
+            return _error_page("Task not found", "Task not found.")
+        except (OSError, RuntimeError):
+            return _error_page("Task unavailable", "Task detail is temporarily unavailable.", status_code=503)
+
+        continuity = record.get("continuity") or {}
+        related_rows: list[dict[str, Any]] = []
+        for run in related:
+            row = dict(run)
+            run_id = str(row["id"])
+            row["id"] = _Link(f"/runs/{run_id}", run_id)
+            row["purpose"] = row.get("purpose") or "Purpose unavailable for historical run."
+            related_rows.append(row)
+
+        source_rows = list(continuity.get("sources") or [])
+        assumption_rows = list(continuity.get("assumptions") or [])
+        content = '<div class="section-stack">' + _panel(
+            "Task record",
+            "Full safe continuity identity and current lifecycle state.",
+            _details(
+                (
+                    ("id", "Task", record.get("id")),
+                    ("schema_version", "Schema version", record.get("schema_version")),
+                    ("revision", "Revision", record.get("revision")),
+                    ("title", "Title", record.get("title")),
+                    ("objective", "Objective", record.get("objective")),
+                    ("project_ref", "Project reference", record.get("project_ref")),
+                    ("status", "Status", record.get("status")),
+                    ("next_action", "Next action", record.get("next_action")),
+                    ("retained", "Retained", record.get("retained")),
+                    ("created_at", "Created", record.get("created_at")),
+                    ("updated_at", "Updated", record.get("updated_at")),
+                    ("archived_at", "Archived", record.get("archived_at")),
+                )
+            ),
+        ) + _panel(
+            "Authorization and recovery",
+            "Operator boundary and recovery information preserved with the Task.",
+            _details(
+                (
+                    ("authorization", "Authorization", continuity.get("authorization")),
+                    ("recovery", "Recovery", continuity.get("recovery")),
+                )
+            ),
+        ) + _panel(
+            "Sources",
+            "Evidence references that informed the continuity record.",
+            _mapping_table(source_rows, (("classification", "Classification"), ("reference", "Reference"), ("purpose", "Purpose"))),
+        ) + _panel(
+            "Completed",
+            "Work already completed for this Task.",
+            _text_list(continuity.get("completed") or []),
+        ) + _panel(
+            "Validation",
+            "Acceptance and validation already performed.",
+            _text_list(continuity.get("validation") or []),
+        ) + _panel(
+            "Cleanup",
+            "Cleanup actions already completed.",
+            _text_list(continuity.get("cleanup") or []),
+        ) + _panel(
+            "Blockers",
+            "Current blockers preserved for continuation.",
+            _text_list(continuity.get("blockers") or []),
+        ) + _panel(
+            "Assumptions",
+            "Explicit assumptions and their impact if wrong.",
+            _mapping_table(assumption_rows, (("statement", "Statement"), ("evidence_class", "Evidence"), ("impact_if_wrong", "Impact"), ("decision", "Decision"))),
+        ) + _panel(
+            "Related Runs",
+            "Runs are derived exclusively from Run.task_id; the Task stores no backlink list.",
+            _table(
+                (("purpose", "Purpose"), ("status", "Status"), ("operation", "Operation"), ("target", "Target"), ("started_at", "Started"), ("id", "Run")),
+                related_rows,
+            ),
+        ) + '</div>'
+        return _page(str(record.get("title") or task_id), "Task continuity detail and purpose-first related execution history.", content, active="/tasks")
+
+    def candidate_detail(request: Request) -> Response:
+        candidate_id = request.path_params["candidate_id"]
+        try:
+            record = model.candidate(candidate_id)
+        except ValueError:
+            return _error_page("Candidate not found", "Structured Candidate detail is not available.")
+        except (OSError, RuntimeError):
+            return _error_page("Candidate unavailable", "Candidate detail is temporarily unavailable.", status_code=503)
+
+        problem = record["problem"]
+        proposal = record["proposal"]
+        safety = proposal["safety"]
+        ownership = record["ownership"]
+        promotion = record["promotion"]
+        implementation = record.get("implementation") or {}
+        task_id = implementation.get("task_id")
+        task_value: Any = _Link(f"/tasks/{task_id}", str(task_id)) if task_id else None
+        final_reference = implementation.get("final_reference")
+        final_value: Any = None
+        if final_reference:
+            reference_id = str(final_reference.get("id"))
+            if final_reference.get("kind") == "managed-tool":
+                final_value = _Link(f"/tooling/{reference_id}", reference_id)
+            else:
+                final_value = reference_id
+
+        content = '<div class="section-stack">' + _panel(
+            "Problem",
+            "The recurring bounded gap this Candidate is intended to address.",
+            _details(
+                (
+                    ("summary", "Summary", problem.get("summary")),
+                    ("cause", "Cause", problem.get("cause")),
+                    ("recurrence", "Recurrence", problem.get("recurrence")),
+                )
+            ) + '<h3>Evidence</h3>' + _text_list(problem.get("evidence") or []),
+        ) + _panel(
+            "Proposal",
+            "The proposed reusable capability and typed interface.",
+            _details(
+                (
+                    ("capability", "Capability", proposal.get("capability")),
+                    ("proposed_tool_id", "Proposed tool ID", proposal.get("proposed_tool_id")),
+                )
+            ) + '<h3>Required inputs</h3>' + _mapping_table(proposal.get("required_inputs") or [], (("name", "Name"), ("description", "Description"))) + '<h3>Expected outputs</h3>' + _mapping_table(proposal.get("expected_outputs") or [], (("name", "Name"), ("description", "Description"))),
+        ) + _panel(
+            "Safety",
+            "Declared execution and secret-access boundary.",
+            _details(
+                (
+                    ("mutating", "Mutating", safety.get("mutating")),
+                    ("secret_access", "Secret access", safety.get("secret_access")),
+                    ("boundary", "Boundary", safety.get("boundary")),
+                )
+            ),
+        ) + _panel(
+            "Ownership and lifecycle",
+            "Stable ownership, promotion state and implementation references.",
+            _details(
+                (
+                    ("owner_id", "Owner", ownership.get("owner_id")),
+                    ("status", "State", promotion.get("state")),
+                    ("rationale", "Promotion rationale", promotion.get("rationale")),
+                    ("state_reason", "State reason", promotion.get("state_reason")),
+                    ("task_id", "Implementation Task", task_value),
+                    ("final_reference", "Final managed capability", final_value),
+                    ("revision", "Revision", record.get("revision")),
+                    ("created_at", "Created", record.get("created_at")),
+                    ("updated_at", "Updated", record.get("updated_at")),
+                )
+            ),
+        ) + _panel(
+            "Acceptance contract",
+            "Conditions that must hold before the Candidate can be accepted as implemented or automated.",
+            _text_list(proposal.get("acceptance") or []),
+        ) + '</div>'
+        return _page(str(record.get("title") or candidate_id), "Structured Candidate proposal, safety, ownership and acceptance contract.", content, active="/tooling")
 
     def skills(request: Request) -> Response:
         try:
@@ -751,8 +1094,12 @@ def create_app(config: HATSConfig) -> Starlette:
             Route("/", home, methods=["GET"]),
             Route("/targets", targets, methods=["GET"]),
             Route("/tooling", tooling, methods=["GET"]),
+            Route("/tooling/{tool_id}", tool_detail, methods=["GET"]),
             Route("/runs", runs, methods=["GET"]),
+            Route("/runs/{run_id}", run_detail, methods=["GET"]),
             Route("/tasks", tasks, methods=["GET"]),
+            Route("/tasks/{task_id}", task_detail, methods=["GET"]),
+            Route("/candidates/{candidate_id}", candidate_detail, methods=["GET"]),
             Route("/skills", skills, methods=["GET"]),
             Route("/help", help_page, methods=["GET"]),
             Route("/help/technical/{slug}", technical_help, methods=["GET"]),
