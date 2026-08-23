@@ -362,3 +362,234 @@ def test_shell_separates_runtime_availability_from_read_only_mode_and_contextual
     assert 'aria-label="Mode: Read-only">Read-only</span>' in response.text
     assert 'aria-label="About this page"' in response.text
     assert 'href="/help/technical/runs-and-tasks"' in response.text
+
+
+from hats_mcp.candidates import (
+    CandidateOwnership,
+    CandidateProblem,
+    CandidateProposal,
+    CandidateReference,
+    CandidateStore,
+)
+
+
+def _wp6_detail_client(tmp_path: Path) -> tuple[TestClient, str, str, str, str]:
+    config = _config(tmp_path)
+    payload = config.model_dump()
+    payload["workspace"]["candidates"] = str(tmp_path / "candidates")
+    config = HATSConfig.model_validate(payload)
+
+    task = TaskStore(config.workspace.tasks, config.workspace.trash).create(
+        title="WP6 continuity fixture",
+        objective="Render the complete safe Task continuity record.",
+        project_ref="projects/example.md",
+        next_action="Accept the read-only detail views.",
+        continuity={
+            "authorization": "Read-only UI acceptance only.",
+            "sources": [
+                {
+                    "classification": "configured",
+                    "reference": "config/example.yaml",
+                    "purpose": "Canonical fixture state.",
+                }
+            ],
+            "completed": ["Implemented detail views."],
+            "validation": ["Unit acceptance pending."],
+            "cleanup": ["No temporary runtime resources retained."],
+            "recovery": "Remove the isolated fixture if acceptance fails.",
+            "blockers": ["None."],
+            "assumptions": [
+                {
+                    "statement": "The browser remains read-only.",
+                    "evidence_class": "configured",
+                    "impact_if_wrong": "high",
+                    "decision": "Reject WP6 if mutation surfaces appear.",
+                }
+            ],
+        },
+    )
+
+    run_store = RunStore(config.workspace.runs)
+    run = run_store.create(
+        operation="run_script",
+        target="docker",
+        timeout_seconds=30,
+        may_mutate=False,
+        idempotent=True,
+        purpose="Verify the WP6 detail relationship without exposing execution content.",
+        task_id=task.id,
+        script_id="system.inspect",
+        script_source="local",
+        script_sha256="a" * 64,
+        argument_names=["example"],
+    )
+    run_store.finish(
+        run.id,
+        {
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 9,
+            "stdout": {"text": "SECRET-STDOUT-MUST-NOT-RENDER", "bytes": 29, "truncated": False},
+            "stderr": {"text": "SECRET-STDERR-MUST-NOT-RENDER", "bytes": 29, "truncated": False},
+        },
+    )
+    historical = run_store.create(
+        operation="run_command",
+        target="docker",
+        timeout_seconds=30,
+        may_mutate=False,
+    )
+    run_store.finish(
+        historical.id,
+        {
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 3,
+            "stdout": {"bytes": 0, "truncated": False},
+            "stderr": {"bytes": 0, "truncated": False},
+        },
+    )
+
+    candidates = CandidateStore(config.workspace.candidates)
+    candidate = candidates.create(
+        candidate_id="ATR-999",
+        title="WP6 structured candidate",
+        problem=CandidateProblem.model_validate(
+            {
+                "summary": "Repeated UI acceptance needs explicit provenance.",
+                "cause": "List-only views hide the decision context.",
+                "recurrence": "The same context is needed across Task, Run and Candidate reviews.",
+                "evidence": ["WP6 product acceptance requires exact provenance navigation."],
+            }
+        ),
+        proposal=CandidateProposal.model_validate(
+            {
+                "capability": "Render read-only provenance detail with exact relationships.",
+                "proposed_tool_id": "system.inspect",
+                "required_inputs": [{"name": "record_id", "description": "Stable record identifier."}],
+                "expected_outputs": [{"name": "detail", "description": "Safe provenance detail view."}],
+                "safety": {
+                    "mutating": False,
+                    "secret_access": False,
+                    "boundary": "Read persisted safe metadata only; never render raw execution content.",
+                },
+                "acceptance": ["Task, Run and managed Tool references resolve to exact read-only detail pages."],
+            }
+        ),
+        ownership=CandidateOwnership(owner_id="X1pheR/homelab-agent-tooling-skills-mcp"),
+        promotion_rationale="The bounded relationship view is reusable product behavior.",
+    )
+    candidate = candidates.transition(
+        candidate.id,
+        expected_revision=candidate.revision,
+        target_state="approved",
+        state_reason="Approved fixture state.",
+    )
+    candidate = candidates.link_task(
+        candidate.id,
+        expected_revision=candidate.revision,
+        task_id=task.id,
+    )
+    candidate = candidates.transition(
+        candidate.id,
+        expected_revision=candidate.revision,
+        target_state="implemented",
+        state_reason="Accepted fixture implementation.",
+        final_reference=CandidateReference(kind="managed-tool", id="system.inspect"),
+    )
+    return TestClient(create_app(config)), task.id, run.id, historical.id, candidate.id
+
+
+def test_wp6_task_and_run_details_use_exact_relationships_and_safe_diagnostics(tmp_path) -> None:
+    client, task_id, run_id, historical_id, _ = _wp6_detail_client(tmp_path)
+
+    task = client.get(f"/tasks/{task_id}")
+    assert task.status_code == 200
+    for expected in (
+        "Render the complete safe Task continuity record.",
+        "Read-only UI acceptance only.",
+        "Canonical fixture state.",
+        "Implemented detail views.",
+        "Unit acceptance pending.",
+        "No temporary runtime resources retained.",
+        "Remove the isolated fixture if acceptance fails.",
+        "The browser remains read-only.",
+        "Related Runs",
+    ):
+        assert expected in task.text
+    assert f'href="/runs/{run_id}"' in task.text
+    assert task.text.index("Verify the WP6 detail relationship") < task.text.index("run_script")
+
+    run = client.get(f"/runs/{run_id}")
+    assert run.status_code == 200
+    assert "Verify the WP6 detail relationship without exposing execution content." in run.text
+    assert f'href="/tasks/{task_id}"' in run.text
+    assert 'href="/tooling/system.inspect"' in run.text
+    assert "Execution succeeded with exit_code=0." in run.text
+    assert "Stdout bytes" in run.text
+    assert "Stderr bytes" in run.text
+    assert "SECRET-STDOUT-MUST-NOT-RENDER" not in run.text
+    assert "SECRET-STDERR-MUST-NOT-RENDER" not in run.text
+    assert "argument_names" not in run.text
+
+    historical = client.get(f"/runs/{historical_id}")
+    assert historical.status_code == 200
+    assert "Purpose is unavailable for this historical run." in historical.text
+
+
+def test_wp6_candidate_detail_renders_contract_and_exact_task_tool_links(tmp_path) -> None:
+    client, task_id, _, _, candidate_id = _wp6_detail_client(tmp_path)
+
+    listing = client.get("/tooling")
+    assert listing.status_code == 200
+    assert f'href="/candidates/{candidate_id}"' in listing.text
+
+    response = client.get(f"/candidates/{candidate_id}")
+    assert response.status_code == 200
+    for expected in (
+        "Repeated UI acceptance needs explicit provenance.",
+        "List-only views hide the decision context.",
+        "Render read-only provenance detail with exact relationships.",
+        "Read persisted safe metadata only; never render raw execution content.",
+        "X1pheR/homelab-agent-tooling-skills-mcp",
+        "Acceptance contract",
+        "Task, Run and managed Tool references resolve to exact read-only detail pages.",
+    ):
+        assert expected in response.text
+    assert f'href="/tasks/{task_id}"' in response.text
+    assert 'href="/tooling/system.inspect"' in response.text
+
+    tool = client.get("/tooling/system.inspect")
+    assert tool.status_code == 200
+    assert "Inspect system" in tool.text
+    assert "inspect.py" not in tool.text
+
+
+def test_wp6_task_run_candidate_browser_surfaces_are_get_only(tmp_path) -> None:
+    client, task_id, run_id, _, candidate_id = _wp6_detail_client(tmp_path)
+    paths = (f"/tasks/{task_id}", f"/runs/{run_id}", f"/candidates/{candidate_id}")
+
+    for path in paths:
+        assert client.get(path).status_code == 200
+        for method in (client.post, client.put, client.patch, client.delete):
+            assert method(path).status_code == 405
+
+    route_root = tmp_path / "route-contract"
+    route_root.mkdir()
+    app = create_app(_config(route_root))
+    protected = [
+        route for route in app.routes
+        if route.path in {"/tasks", "/tasks/{task_id}", "/runs", "/runs/{run_id}", "/candidates/{candidate_id}"}
+    ]
+    assert protected
+    assert all(route.methods <= {"GET", "HEAD"} for route in protected)
+
+
+def test_wp6_structured_candidate_detail_fails_closed_when_store_is_not_configured(tmp_path) -> None:
+    client = _client(tmp_path)
+    response = client.get("/candidates/ATR-999")
+
+    assert response.status_code == 404
+    assert response.text == "Structured Candidate detail is not available."

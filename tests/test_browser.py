@@ -135,3 +135,42 @@ def test_growing_table_reflows_as_semantic_records_on_mobile(page: Page) -> None
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     _assert_wcag_a_aa(page)
     _assert_clean_browser(errors)
+
+
+def test_wp6_read_only_provenance_detail_navigation(page: Page) -> None:
+    errors = _observe_page(page)
+    task_id = "task-20260820T120000000000Z-abcdef123456"
+    run_id = "run-20260820T120100000000Z-123456abcdef"
+
+    page.goto(f"{BASE_URL}/tasks/{task_id}", wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Browser WP6 continuity fixture", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Related Runs", exact=True)).to_be_visible()
+    run_link = page.get_by_role("link", name=run_id, exact=True)
+    expect(run_link).to_have_attribute("href", f"/runs/{run_id}")
+    expect(page.get_by_text("Verify exact read-only browser provenance navigation.", exact=True)).to_be_visible()
+    assert page.locator('form[method="post"], form[method="POST"]').count() == 0
+
+    run_link.click()
+    expect(page).to_have_url(f"{BASE_URL}/runs/{run_id}")
+    expect(page.get_by_role("heading", name="Purpose", exact=True)).to_be_visible()
+    task_link = page.get_by_role("link", name=task_id, exact=True)
+    expect(task_link).to_have_attribute("href", f"/tasks/{task_id}")
+    expect(page.get_by_role("link", name="system.inspect", exact=True)).to_have_attribute(
+        "href", "/tooling/system.inspect"
+    )
+    expect(page.get_by_role("heading", name="Diagnostics", exact=True)).to_be_visible()
+    assert page.locator('form[method="post"], form[method="POST"]').count() == 0
+
+    page.goto(f"{BASE_URL}/candidates/ATR-999", wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Browser WP6 structured candidate", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Problem", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Acceptance contract", exact=True)).to_be_visible()
+    expect(page.get_by_role("link", name=task_id, exact=True)).to_have_attribute("href", f"/tasks/{task_id}")
+    expect(page.get_by_role("link", name="system.inspect", exact=True)).to_have_attribute(
+        "href", "/tooling/system.inspect"
+    )
+    assert page.locator('form[method="post"], form[method="POST"]').count() == 0
+    assert page.locator('button:has-text("Create"), button:has-text("Update"), button:has-text("Approve"), button:has-text("Complete")').count() == 0
+
+    _assert_wcag_a_aa(page)
+    _assert_clean_browser(errors)
