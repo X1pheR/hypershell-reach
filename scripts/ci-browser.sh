@@ -3,19 +3,31 @@ set -euo pipefail
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 RESULTS_ROOT="${BROWSER_RESULTS_ROOT:-${ROOT_DIR}/test-results}"
-BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser"
-APP_LOG="${RESULTS_ROOT}/hats-ui.log"
-PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d"
 RUN_ID="${BROWSER_RUN_ID:-$(date +%s)-$$}"
+BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"
+APP_LOG="${BROWSER_RESULTS_DIR}/hats-ui.log"
+PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python:v1.62.0-noble"
+BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/hats-ci-browser.lock}"
+BROWSER_RUN_TIMEOUT_SECONDS="${BROWSER_RUN_TIMEOUT_SECONDS:-600}"
+BROWSER_TEST_TIMEOUT_SECONDS="${BROWSER_TEST_TIMEOUT_SECONDS:-300}"
 NETWORK="hats-browser-${RUN_ID}"
 APP_CONTAINER="hats-browser-app-${RUN_ID}"
 PLAYWRIGHT_CONTAINER="hats-browser-playwright-${RUN_ID}"
 APP_IMAGE="hats-browser-app:${RUN_ID}"
 BASE_URL="http://${APP_CONTAINER}:8080"
-FIXTURE_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/hats-browser.XXXXXX")"
+if [[ "${HATS_BROWSER_RUN_TIMEOUT_ACTIVE:-0}" != "1" ]]; then
+  export HATS_BROWSER_RUN_TIMEOUT_ACTIVE=1
+  exec timeout --signal=TERM --kill-after=30s "${BROWSER_RUN_TIMEOUT_SECONDS}" bash "$0" "$@"
+fi
 
+exec 9>"${BROWSER_LOCK_FILE}"
+if ! flock -n 9; then
+  echo "Another HATS browser acceptance run is already active" >&2
+  exit 75
+fi
+
+FIXTURE_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/hats-browser.XXXXXX")"
 mkdir -p "${BROWSER_RESULTS_DIR}"
-rm -rf "${BROWSER_RESULTS_DIR:?}"/*
 mkdir -p "${FIXTURE_ROOT}/tmp" "${FIXTURE_ROOT}/runs" "${FIXTURE_ROOT}/tasks" \
   "${FIXTURE_ROOT}/trash" "${FIXTURE_ROOT}/tools" "${FIXTURE_ROOT}/skills/example"
 
@@ -165,9 +177,14 @@ playwright_created=1
 docker cp "${ROOT_DIR}/tests/test_browser.py" "${PLAYWRIGHT_CONTAINER}:/test_browser.py"
 
 set +e
-docker start -a "${PLAYWRIGHT_CONTAINER}"
+timeout --signal=TERM --kill-after=30s "${BROWSER_TEST_TIMEOUT_SECONDS}" \
+  docker start -a "${PLAYWRIGHT_CONTAINER}"
 test_status=$?
 set -e
+
+if [[ "${test_status}" -eq 124 ]]; then
+  echo "HATS browser acceptance exceeded ${BROWSER_TEST_TIMEOUT_SECONDS}s" >&2
+fi
 
 docker cp "${PLAYWRIGHT_CONTAINER}:/test-results/browser/." "${BROWSER_RESULTS_DIR}/" 2>/dev/null || true
 exit "${test_status}"
