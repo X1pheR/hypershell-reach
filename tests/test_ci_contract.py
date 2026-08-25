@@ -20,7 +20,19 @@ def test_github_actions_are_pinned_to_full_commit_shas() -> None:
 def test_release_write_permission_is_job_scoped() -> None:
     assert "permissions:\n  contents: read" in RELEASE
     release_job = RELEASE.split("  release:\n", 1)[1]
-    assert "    permissions:\n      contents: write" in release_job
+    assert "    permissions:\n      contents: write\n      packages: write" in release_job
+
+
+def test_release_publishes_versioned_ghcr_image_and_digest_metadata() -> None:
+    assert 'image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"' in RELEASE
+    assert 'docker login ghcr.io' in RELEASE
+    assert 'docker build \\' in RELEASE
+    assert '--build-arg REACH_VERSION="${version}"' in RELEASE
+    assert '--build-arg REACH_REVISION="${GITHUB_SHA}"' in RELEASE
+    assert 'docker push "${image}"' in RELEASE
+    assert 'IMAGE.txt' in RELEASE
+    assert "\x01" not in RELEASE
+    assert '"${push_output}" | sed -n' not in RELEASE
 
 
 def test_browser_gate_is_reused_by_ci_and_release() -> None:
@@ -55,9 +67,9 @@ def test_browser_container_matches_reviewed_playwright_runtime() -> None:
 
 
 def test_browser_gate_prevents_parallel_local_runs() -> None:
-    assert 'BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/hats-ci-browser.lock}"' in BROWSER
+    assert 'BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/reach-ci-browser.lock}"' in BROWSER
     assert 'flock -n 9' in BROWSER
-    assert 'Another HATS browser acceptance run is already active' in BROWSER
+    assert 'Another Hypershell Reach browser acceptance run is already active' in BROWSER
 
 
 def test_browser_gate_has_a_hard_test_timeout() -> None:
@@ -69,7 +81,7 @@ def test_browser_gate_has_a_hard_test_timeout() -> None:
 
 def test_browser_results_are_isolated_per_run() -> None:
     assert 'BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"' in BROWSER
-    assert 'APP_LOG="${BROWSER_RESULTS_DIR}/hats-ui.log"' in BROWSER
+    assert 'APP_LOG="${BROWSER_RESULTS_DIR}/reach.log"' in BROWSER
     assert 'rm -rf "${BROWSER_RESULTS_DIR:?}"/*' not in BROWSER
 
 

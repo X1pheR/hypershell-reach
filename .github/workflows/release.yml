@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -39,6 +40,31 @@ jobs:
           export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           uv build --out-dir dist
           sha256sum dist/*.whl dist/*.tar.gz | sed 's#  dist/#  #' > SHA256SUMS
+      - name: Build and publish versioned container image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"
+          created="$(date -u -d "@$(git show -s --format=%ct HEAD)" +'%Y-%m-%dT%H:%M:%SZ')"
+          printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          docker build \
+            --build-arg REACH_VERSION="${version}" \
+            --build-arg REACH_REVISION="${GITHUB_SHA}" \
+            --build-arg REACH_CREATED="${created}" \
+            --tag "${image}" \
+            .
+          push_output="$(docker push "${image}" 2>&1)"
+          printf '%s
+' "${push_output}"
+          digest="$(printf '%s\n' "${push_output}" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
+          test -n "${digest}"
+          printf 'image: %s
+digest: %s
+revision: %s
+' "${image}" "${digest}" "${GITHUB_SHA}" > IMAGE.txt
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -49,6 +75,7 @@ jobs:
             dist/*.whl \
             dist/*.tar.gz \
             SHA256SUMS \
+            IMAGE.txt \
             --verify-tag \
-            --title "HATS ${GITHUB_REF_NAME}" \
+            --title "Hypershell Reach ${GITHUB_REF_NAME}" \
             --notes-from-tag

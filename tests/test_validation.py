@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from hats_mcp.cli import main
-from hats_mcp.validation import validate_configuration
+from hypershell_reach.service import main
+from hypershell_reach.validation import validate_configuration
 
 
 def _write_skill(root: Path, name: str = "example-skill") -> None:
@@ -109,7 +109,7 @@ def _write_config(tmp_path: Path, *, hermes: bool = False, missing_identity: boo
         "sources": sources,
         "targets": targets,
     }
-    config_path = tmp_path / "hats.yaml"
+    config_path = tmp_path / "reach.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return config_path
 
@@ -134,13 +134,13 @@ def test_validate_reports_operator_visible_configuration(tmp_path: Path) -> None
 def test_validate_reports_bundled_tool_source(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    payload["sources"]["tools"] = [{"id": "hats", "type": "bundled"}]
+    payload["sources"]["tools"] = [{"id": "reach", "type": "bundled"}]
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     report = validate_configuration(config_path)
 
     assert report.valid is True
-    assert "- hats" in report.text
+    assert "- reach" in report.text
     assert "Type: bundled" in report.text
     assert "bundled_tools" in report.text
     assert "Scripts: 5" in report.text
@@ -196,9 +196,9 @@ def test_validate_cli_uses_exit_two_for_usage_error() -> None:
     assert excinfo.value.code == 2
 
 
-def test_validate_cli_uses_hats_config_environment(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_validate_cli_uses_reach_config_environment(tmp_path: Path, monkeypatch, capsys) -> None:
     config_path = _write_config(tmp_path)
-    monkeypatch.setenv("HATS_CONFIG", str(config_path))
+    monkeypatch.setenv("REACH_CONFIG", str(config_path))
 
     with pytest.raises(SystemExit) as excinfo:
         main(["validate"])
@@ -274,3 +274,24 @@ def test_validate_checks_configured_candidate_workspace(tmp_path: Path) -> None:
 
     assert report.valid is True
     assert f"candidates: {candidate_root} [writable]" in report.text
+
+
+def test_validate_reports_transport_safe_timeout_and_executor_configuration(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["defaults"] = {
+        "max_timeout_seconds": 300,
+        "max_synchronous_timeout_seconds": 90,
+    }
+    payload["executor"] = {"max_concurrency": 2}
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert "Execution timeout: 300s" in report.text
+    assert "Synchronous timeout: 90s" in report.text
+    assert "Execution manager" in report.text
+    assert "Status: integrated" in report.text
+    assert "Max concurrency: 2" in report.text
+    assert "Max concurrency: 2" in report.text

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(
     reason="canonical browser acceptance is executed by the dedicated CI job",
 )
 
-BASE_URL = os.environ.get("HATS_BROWSER_BASE_URL", "http://127.0.0.1:18081")
+BASE_URL = os.environ.get("REACH_BROWSER_BASE_URL", "http://127.0.0.1:18081")
 
 
 @dataclass
@@ -52,12 +52,12 @@ def _assert_wcag_a_aa(page: Page) -> None:
     assert results.violations_count == 0, results.generate_report()
 
 
-def test_hats_browser_desktop_shell(page: Page) -> None:
+def test_reach_browser_desktop_shell(page: Page) -> None:
     errors = _observe_page(page)
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto(BASE_URL, wait_until="networkidle")
 
-    expect(page).to_have_title("Overview · HATS")
+    expect(page).to_have_title("Overview · Hypershell Reach")
     expect(page.get_by_role("heading", name="Overview", exact=True)).to_be_visible()
     navigation = page.get_by_role("navigation", name="Primary navigation")
     expect(navigation).to_be_visible()
@@ -84,7 +84,31 @@ def test_family_mobile_reflow_has_no_page_level_horizontal_overflow(page: Page, 
     _assert_clean_browser(errors)
 
 
-def test_hats_browser_mobile_navigation(page: Page) -> None:
+def test_header_progress_marks_internal_navigation_busy(page: Page) -> None:
+    errors = _observe_page(page)
+    page.goto(BASE_URL, wait_until="networkidle")
+
+    expect(page.locator(".navigation-progress")).to_be_attached()
+    assert page.locator("html").get_attribute("class") in (None, "")
+    assert page.locator("body").get_attribute("aria-busy") is None
+
+    page.evaluate(
+        """() => {
+          document.addEventListener('click', (event) => event.preventDefault(), { once: true });
+          document.querySelector('a[href=\"/skills\"]').click();
+        }"""
+    )
+    expect(page.locator("html")).to_have_class("is-navigating")
+    expect(page.locator("body")).to_have_attribute("aria-busy", "true")
+
+    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pageshow'))")
+    expect(page.locator("html")).not_to_have_class("is-navigating")
+    assert page.locator("body").get_attribute("aria-busy") is None
+
+    _assert_clean_browser(errors)
+
+
+def test_reach_browser_mobile_navigation(page: Page) -> None:
     errors = _observe_page(page)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(BASE_URL, wait_until="networkidle")
@@ -93,7 +117,7 @@ def test_hats_browser_mobile_navigation(page: Page) -> None:
     expect(menu).to_be_visible()
     menu.click()
 
-    dialog = page.get_by_role("dialog", name="HATS navigation")
+    dialog = page.get_by_role("dialog", name="Hypershell Reach navigation")
     expect(dialog).to_be_visible()
     page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
@@ -101,7 +125,7 @@ def test_hats_browser_mobile_navigation(page: Page) -> None:
 
     menu.click()
     dialog.get_by_role("link", name="Targets", exact=True).click()
-    expect(page).to_have_title("Targets · HATS")
+    expect(page).to_have_title("Targets · Hypershell Reach")
     expect(page.get_by_role("heading", name="Targets", exact=True)).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -21,11 +23,12 @@ RunStatus = Literal[
     "unknown",
 ]
 RunOperation = Literal["run_command", "run_shell", "run_script"]
+RunExecutionMode = Literal["sync", "async"]
 
 _RUN_ID = re.compile(r"^run-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _TERMINAL_CLEANUP_STATUSES = {"succeeded", "remote_error", "transport_error", "timeout", "local_error"}
 _AMBIGUOUS_STATUSES = {"transport_error", "timeout", "interrupted", "unknown"}
-RUN_SCHEMA_VERSION = 2
+RUN_SCHEMA_VERSION = 3
 PURPOSE_MAX_LENGTH = 512
 RESULT_SUMMARY_MAX_LENGTH = 512
 RESULT_SUMMARY_TRUNCATION_SUFFIX = " [truncated]"
@@ -119,10 +122,11 @@ def new_run_id(now: datetime | None = None) -> str:
 class RunRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2] = RUN_SCHEMA_VERSION
+    schema_version: Literal[1, 2, 3] = RUN_SCHEMA_VERSION
     id: str
     operation: RunOperation
     target: str
+    execution_mode: RunExecutionMode = "sync"
     purpose: str | None = Field(default=None, min_length=1, max_length=PURPOSE_MAX_LENGTH, strict=True)
     result_summary: str | None = Field(default=None, max_length=RESULT_SUMMARY_MAX_LENGTH, strict=True)
     task_id: str | None = None
@@ -165,6 +169,8 @@ class RunRecord(BaseModel):
     def validate_schema_fields(self) -> "RunRecord":
         if self.schema_version == 1 and (self.purpose is not None or self.result_summary is not None):
             raise ValueError("Run schema v1 cannot contain purpose or result_summary")
+        if self.schema_version < 3 and self.execution_mode != "sync":
+            raise ValueError("Run schemas before v3 cannot contain async execution ownership")
         return self
 
     def summary(self) -> dict[str, object]:
@@ -173,6 +179,7 @@ class RunRecord(BaseModel):
             "id": self.id,
             "operation": self.operation,
             "target": self.target,
+            "execution_mode": self.execution_mode,
             "purpose": self.purpose,
             "result_summary": self.result_summary,
             "task_id": self.task_id,
@@ -195,11 +202,14 @@ class RunStore:
         completed_days: int | None = None,
         now: Callable[[], datetime] = utc_now,
         read_only: bool = False,
+        reconcile_modes: set[RunExecutionMode] | None = None,
     ) -> None:
         self.root = Path(root)
         self.completed_days = completed_days
         self._now = now
         self.read_only = read_only
+        self.reconcile_modes = reconcile_modes if reconcile_modes is not None else {"sync", "async"}
+        self.write_lock_path = self.root / ".write.lock"
         if not self.read_only:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
             self.reconcile_incomplete()
@@ -213,6 +223,17 @@ class RunStore:
         if self.read_only:
             raise RuntimeError("run store is read-only")
 
+    @contextmanager
+    def _write_lock(self):
+        self._require_writable()
+        fd = os.open(self.write_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def _atomic_write(self, record: RunRecord) -> None:
         self._require_writable()
         path = self._path(record.id)
@@ -221,6 +242,8 @@ class RunStore:
         if record.schema_version == 1:
             serialized.pop("purpose", None)
             serialized.pop("result_summary", None)
+        if record.schema_version < 3:
+            serialized.pop("execution_mode", None)
         payload = json.dumps(serialized, indent=2, sort_keys=True) + "\n"
         try:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -249,6 +272,7 @@ class RunStore:
         target: str,
         timeout_seconds: int,
         may_mutate: bool,
+        execution_mode: RunExecutionMode = "sync",
         purpose: str | None = None,
         idempotent: bool | None = None,
         task_id: str | None = None,
@@ -263,6 +287,7 @@ class RunStore:
             id=new_run_id(now),
             operation=operation,
             target=target,
+            execution_mode=execution_mode,
             purpose=purpose,
             task_id=task_id,
             script_id=script_id,
@@ -292,13 +317,25 @@ class RunStore:
     ) -> list[RunRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("run list limit must be between 1 and 500")
-        records = [self._read_path(path) for path in self.root.glob("run-*.json") if path.is_file()]
-        if status is not None:
-            records = [record for record in records if record.status == status]
-        if task_id is not None:
-            records = [record for record in records if record.task_id == task_id]
-        records.sort(key=lambda record: (record.started_at, record.id), reverse=True)
-        return records[:limit]
+        paths = sorted(
+            (path for path in self.root.glob("run-*.json") if path.is_file()),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        records: list[RunRecord] = []
+        for path in paths:
+            record = self._read_path(path)
+            if status is not None and record.status != status:
+                continue
+            if task_id is not None and record.task_id != task_id:
+                continue
+            records.append(record)
+            if len(records) >= limit:
+                break
+        return records
+
+    def count(self) -> int:
+        return sum(1 for path in self.root.glob("run-*.json") if path.is_file())
 
     def recent(self, *, limit: int = 20) -> list[RunRecord]:
         if limit < 1 or limit > 100:
@@ -311,37 +348,38 @@ class RunStore:
         return [self._read_path(path) for path in paths[:limit]]
 
     def finish(self, run_id: str, execution: dict[str, Any]) -> RunRecord:
-        record = self.get(run_id)
-        if record.status != "running":
-            raise RuntimeError(f"run is not running: {run_id}")
-        status = execution.get("status")
-        if status not in {"succeeded", "remote_error", "transport_error", "timeout"}:
-            raise RuntimeError(f"unsupported execution status for run {run_id}: {status}")
+        with self._write_lock():
+            record = self.get(run_id)
+            if record.status != "running":
+                raise RuntimeError(f"run is not running: {run_id}")
+            status = execution.get("status")
+            if status not in {"succeeded", "remote_error", "transport_error", "timeout"}:
+                raise RuntimeError(f"unsupported execution status for run {run_id}: {status}")
 
-        stdout = execution.get("stdout") if isinstance(execution.get("stdout"), dict) else {}
-        stderr = execution.get("stderr") if isinstance(execution.get("stderr"), dict) else {}
-        ended = self._now()
-        updated = record.model_copy(
-            update={
-                "ended_at": format_timestamp(ended),
-                "status": status,
-                "ambiguous": bool(record.may_mutate and status in _AMBIGUOUS_STATUSES),
-                "exit_code": execution.get("exit_code"),
-                "timed_out": bool(execution.get("timed_out")),
-                "duration_ms": execution.get("duration_ms"),
-                "stdout_bytes": stdout.get("bytes"),
-                "stderr_bytes": stderr.get("bytes"),
-                "stdout_truncated": stdout.get("truncated"),
-                "stderr_truncated": stderr.get("truncated"),
-                "result_summary": (
-                    _execution_result_summary(record, execution)
-                    if record.schema_version == RUN_SCHEMA_VERSION
-                    else record.result_summary
-                ),
-            }
-        )
-        self._atomic_write(updated)
-        return updated
+            stdout = execution.get("stdout") if isinstance(execution.get("stdout"), dict) else {}
+            stderr = execution.get("stderr") if isinstance(execution.get("stderr"), dict) else {}
+            ended = self._now()
+            updated = record.model_copy(
+                update={
+                    "ended_at": format_timestamp(ended),
+                    "status": status,
+                    "ambiguous": bool(record.may_mutate and status in _AMBIGUOUS_STATUSES),
+                    "exit_code": execution.get("exit_code"),
+                    "timed_out": bool(execution.get("timed_out")),
+                    "duration_ms": execution.get("duration_ms"),
+                    "stdout_bytes": stdout.get("bytes"),
+                    "stderr_bytes": stderr.get("bytes"),
+                    "stdout_truncated": stdout.get("truncated"),
+                    "stderr_truncated": stderr.get("truncated"),
+                    "result_summary": (
+                        _execution_result_summary(record, execution)
+                        if record.schema_version >= 2
+                        else record.result_summary
+                    ),
+                }
+            )
+            self._atomic_write(updated)
+            return updated
 
     def fail_local(self, run_id: str, error_type: str) -> RunRecord:
         return self._finish_without_execution(run_id, status="local_error", error_type=error_type)
@@ -359,31 +397,33 @@ class RunStore:
         status: Literal["local_error", "interrupted", "unknown"],
         error_type: str,
     ) -> RunRecord:
-        record = self.get(run_id)
-        if record.status != "running":
-            return record
-        safe_error_type = error_type[:200]
-        updated = record.model_copy(
-            update={
-                "ended_at": format_timestamp(self._now()),
-                "status": status,
-                "ambiguous": bool(record.may_mutate and status in _AMBIGUOUS_STATUSES),
-                "error_type": safe_error_type,
-                "result_summary": (
-                    _internal_result_summary(record, status, safe_error_type)
-                    if record.schema_version == RUN_SCHEMA_VERSION
-                    else record.result_summary
-                ),
-            }
-        )
-        self._atomic_write(updated)
-        return updated
+        with self._write_lock():
+            record = self.get(run_id)
+            if record.status != "running":
+                return record
+            safe_error_type = error_type[:200]
+            updated = record.model_copy(
+                update={
+                    "ended_at": format_timestamp(self._now()),
+                    "status": status,
+                    "ambiguous": bool(record.may_mutate and status in _AMBIGUOUS_STATUSES),
+                    "error_type": safe_error_type,
+                    "result_summary": (
+                        _internal_result_summary(record, status, safe_error_type)
+                        if record.schema_version >= 2
+                        else record.result_summary
+                    ),
+                }
+            )
+            self._atomic_write(updated)
+            return updated
 
     def set_retained(self, run_id: str, retained: bool) -> RunRecord:
-        record = self.get(run_id)
-        updated = record.model_copy(update={"retained": retained})
-        self._atomic_write(updated)
-        return updated
+        with self._write_lock():
+            record = self.get(run_id)
+            updated = record.model_copy(update={"retained": retained})
+            self._atomic_write(updated)
+            return updated
 
     def reconcile_incomplete(self) -> int:
         self._require_writable()
@@ -392,8 +432,9 @@ class RunStore:
             if not path.is_file():
                 continue
             record = self._read_path(path)
-            if record.status == "running":
-                self.interrupt(record.id, error_type="ServerRestart")
+            if record.status == "running" and record.execution_mode in self.reconcile_modes:
+                error_type = "ExecutorRestart" if record.execution_mode == "async" else "ServerRestart"
+                self.interrupt(record.id, error_type=error_type)
                 reconciled += 1
         return reconciled
 
@@ -406,13 +447,16 @@ class RunStore:
         for path in sorted(self.root.glob("run-*.json")):
             if not path.is_file():
                 continue
-            record = self._read_path(path)
-            if record.status not in _TERMINAL_CLEANUP_STATUSES:
-                continue
-            if record.ambiguous or record.retained or record.ended_at is None:
-                continue
-            if parse_timestamp(record.ended_at) > cutoff:
-                continue
-            path.unlink()
-            removed.append(record.id)
+            with self._write_lock():
+                if not path.is_file():
+                    continue
+                record = self._read_path(path)
+                if record.status not in _TERMINAL_CLEANUP_STATUSES:
+                    continue
+                if record.ambiguous or record.retained or record.ended_at is None:
+                    continue
+                if parse_timestamp(record.ended_at) > cutoff:
+                    continue
+                path.unlink()
+                removed.append(record.id)
         return removed

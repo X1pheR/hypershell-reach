@@ -5,17 +5,17 @@ import importlib.util
 from pathlib import Path
 import subprocess
 
-from hats_mcp.config import ToolSource
-from hats_mcp.managed_tools import load_tool_registry, resolve_tool_source_root
+from hypershell_reach.config import ToolSource
+from hypershell_reach.managed_tools import load_tool_registry, resolve_tool_source_root
 
 
-BUNDLED_SOURCE = ToolSource(id="hats", type="bundled")
+BUNDLED_SOURCE = ToolSource(id="reach", type="bundled")
 ROOT = Path(__file__).parents[1]
-PERFORMANCE_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/performance/host-preflight.py"
-GIT_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/git/summary-bounded.py"
-SNAPSHOT_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/snapshot-modes.py"
-COMPARE_MODES_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/compare-modes.py"
-LITERAL_MATCH_COUNT_SCRIPT = ROOT / "src/hats_mcp/bundled_tools/filesystem/literal-match-count.py"
+PERFORMANCE_SCRIPT = ROOT / "src/hypershell_reach/bundled_tools/performance/host-preflight.py"
+GIT_SCRIPT = ROOT / "src/hypershell_reach/bundled_tools/git/summary-bounded.py"
+SNAPSHOT_MODES_SCRIPT = ROOT / "src/hypershell_reach/bundled_tools/filesystem/snapshot-modes.py"
+COMPARE_MODES_SCRIPT = ROOT / "src/hypershell_reach/bundled_tools/filesystem/compare-modes.py"
+LITERAL_MATCH_COUNT_SCRIPT = ROOT / "src/hypershell_reach/bundled_tools/filesystem/literal-match-count.py"
 
 
 def _load(name: str, path: Path):
@@ -47,7 +47,7 @@ def _git_fixture(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
-    _git(repo, "config", "user.name", "HATS Fixture")
+    _git(repo, "config", "user.name", "Hypershell Reach Fixture")
     _git(repo, "config", "user.email", "fixture@invalid.example")
     (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
     _git(repo, "add", "tracked.txt")
@@ -74,7 +74,7 @@ def test_bundled_registry_contains_expected_tools() -> None:
     }
 
     performance_script = scripts["performance.host-preflight"]
-    assert performance_script.source_id == "hats"
+    assert performance_script.source_id == "reach"
     assert performance_script.relative_path == "performance/host-preflight.py"
     assert performance_script.metadata.interpreter == "python3"
     assert performance_script.metadata.mutating is False
@@ -118,7 +118,7 @@ def test_bundled_registry_contains_expected_tools() -> None:
     ]
 
     git_script = scripts["git.summary-bounded"]
-    assert git_script.source_id == "hats"
+    assert git_script.source_id == "reach"
     assert git_script.relative_path == "git/summary-bounded.py"
     assert git_script.metadata.interpreter == "python3"
     assert git_script.metadata.mutating is False

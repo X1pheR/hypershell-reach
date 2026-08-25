@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from hats_mcp import server
-from hats_mcp.candidates import CandidateStore
-from hats_mcp.config import HATSConfig
-from hats_mcp.tasks import TaskStore
+from hypershell_reach import server
+from hypershell_reach.candidates import CandidateStore
+from hypershell_reach.config import ReachConfig
+from hypershell_reach.tasks import TaskStore
 
 
-def _config(tmp_path, *, candidates: bool = True) -> HATSConfig:
+def _config(tmp_path, *, candidates: bool = True) -> ReachConfig:
     workspace = {
         "tmp": str(tmp_path / "tmp"),
         "runs": str(tmp_path / "runs"),
@@ -19,11 +19,11 @@ def _config(tmp_path, *, candidates: bool = True) -> HATSConfig:
     }
     if candidates:
         workspace["candidates"] = str(tmp_path / "candidates")
-    return HATSConfig.model_validate(
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": workspace,
-            "sources": {"tools": [{"id": "hats", "type": "bundled"}]},
+            "sources": {"tools": [{"id": "reach", "type": "bundled"}]},
             "targets": {
                 "example": {
                     "display_name": "Example",
@@ -66,12 +66,12 @@ def _create_input() -> dict:
             },
             "acceptance": ["Returns deterministic pass/fail for every declared precondition."],
         },
-        "ownership": {"owner_id": "X1pheR/homelab-agent-tooling-skills-mcp"},
+        "ownership": {"owner_id": "X1pheR/hypershell-reach"},
         "promotion_rationale": "The recurring bounded workflow is reusable and deterministic.",
     }
 
 
-def _install_stores(tmp_path, monkeypatch, config: HATSConfig) -> None:
+def _install_stores(tmp_path, monkeypatch, config: ReachConfig) -> None:
     monkeypatch.setattr(server, "_config", config, raising=False)
     monkeypatch.setattr(
         server,
@@ -186,7 +186,7 @@ async def test_candidate_final_managed_tool_reference_must_exist(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_candidate_task_link_requires_existing_hats_task(tmp_path, monkeypatch) -> None:
+async def test_candidate_task_link_requires_existing_reach_task(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     _install_stores(tmp_path, monkeypatch, config)
     await server.call_tool("create_candidate", _create_input())

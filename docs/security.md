@@ -1,6 +1,6 @@
 # Security
 
-HATS exposes powerful execution capabilities. Keep the service private and expose only the MCP tools required by each client.
+Hypershell Reach exposes powerful execution capabilities. Keep the service private and expose only the MCP tools required by each client.
 
 ## Execution
 
@@ -15,9 +15,16 @@ SSH execution enforces:
 - one connection attempt;
 - bounded timeout and output;
 - no automatic retry;
-- redaction of configured host and credential paths from returned SSH errors.
+- redaction of configured host and credential paths from returned SSH errors;
+- explicit separation between the full execution timeout and the synchronous transport-safe timeout.
 
 Configuration selects the host, user, identity and known-hosts file. The caller cannot replace those values per request.
+
+## Durable asynchronous execution
+
+The optional executor listens only on a local Unix socket created with mode `0600`. It adds no public network endpoint and reuses the same typed target and SSH boundaries as synchronous execution. Accepted jobs are not cancelled when an MCP requester disconnects. Explicit cancellation is a separate `cancel_run` operation that requires `confirm=true`; executor shutdown also cancels its owned local SSH process groups before marking Runs interrupted.
+
+The executor bounds concurrent async work and persists only the same allowlisted Run metadata as synchronous Hypershell Reach execution. Raw command/script content and argument values cross the private submission socket in memory but are not written to Run state.
 
 ## Managed tools
 
@@ -29,7 +36,7 @@ Typed arguments are validated before execution and converted to deterministic op
 
 ## Authorization
 
-HATS execution controls do not authorize a requested change. A caller or agent must still apply its own operating rules before disruptive, destructive or security-sensitive operations.
+Hypershell Reach execution controls do not authorize a requested change. A caller or agent must still apply its own operating rules before disruptive, destructive or security-sensitive operations.
 
 Managed tool metadata is descriptive execution metadata, not an authorization policy. `mutating` and `idempotent` communicate behavior; they do not grant permission.
 
@@ -41,4 +48,4 @@ Skill content can contain unsafe or irrelevant instructions. Loading a skill doe
 
 ## Secrets
 
-Do not put private keys or secret values in HATS configuration, tool metadata, logs, run records or task records. Secret files are referenced by path and mounted separately by the deployment.
+Do not put private keys or secret values in Hypershell Reach configuration, tool metadata, logs, run records or task records. Secret files are referenced by path and mounted separately by the deployment.

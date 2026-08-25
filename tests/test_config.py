@@ -3,17 +3,17 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from hats_mcp.config import HATSConfig, load_config
+from hypershell_reach.config import ReachConfig, load_config
 
 
 def _config() -> dict:
     return {
         "schema_version": 1,
         "workspace": {
-            "tmp": "/tmp/hats",
-            "runs": "/var/lib/hats/runs",
-            "tasks": "/var/lib/hats/tasks",
-            "trash": "/var/lib/hats/trash",
+            "tmp": "/tmp/reach",
+            "runs": "/var/lib/reach/runs",
+            "tasks": "/var/lib/reach/tasks",
+            "trash": "/var/lib/reach/trash",
         },
         "targets": {
             "docker": {
@@ -31,7 +31,7 @@ def _config() -> dict:
 
 
 def test_config_normalizes_target_capabilities() -> None:
-    config = HATSConfig.model_validate(_config())
+    config = ReachConfig.model_validate(_config())
     assert config.targets["docker"].capabilities == ["docker", "linux"]
 
 
@@ -39,38 +39,38 @@ def test_enabled_target_requires_host() -> None:
     payload = _config()
     payload["targets"]["docker"]["ssh"].pop("host")
     with pytest.raises(ValidationError, match="enabled targets require"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_relative_workspace_path_is_rejected() -> None:
     payload = _config()
     payload["workspace"]["tmp"] = "relative/tmp"
     with pytest.raises(ValidationError, match="workspace paths must be absolute"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_relative_ssh_path_is_rejected() -> None:
     payload = _config()
     payload["targets"]["docker"]["ssh"]["identity_file"] = "relative/key"
     with pytest.raises(ValidationError, match="SSH file paths must be absolute"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_missing_environment_path_is_rejected(monkeypatch) -> None:
-    monkeypatch.delenv("HATS_CONFIG", raising=False)
-    with pytest.raises(RuntimeError, match="HATS_CONFIG is not set"):
+    monkeypatch.delenv("REACH_CONFIG", raising=False)
+    with pytest.raises(RuntimeError, match="REACH_CONFIG is not set"):
         load_config()
 
 
 def test_yaml_config_loads(tmp_path) -> None:
-    path = tmp_path / "hats.yaml"
+    path = tmp_path / "reach.yaml"
     path.write_text(
         """schema_version: 1
 workspace:
-  tmp: /tmp/hats
-  runs: /var/lib/hats/runs
-  tasks: /var/lib/hats/tasks
-  trash: /var/lib/hats/trash
+  tmp: /tmp/reach
+  runs: /var/lib/reach/runs
+  tasks: /var/lib/reach/tasks
+  trash: /var/lib/reach/trash
 targets:
   docker:
     display_name: Docker host
@@ -90,28 +90,28 @@ def test_tool_source_path_must_be_absolute() -> None:
     payload = _config()
     payload["sources"] = {"tools": [{"id": "local", "path": "relative/tools"}]}
     with pytest.raises(ValidationError, match="tool source paths must be absolute"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_bundled_tool_source_requires_no_path() -> None:
     payload = _config()
-    payload["sources"] = {"tools": [{"id": "hats", "type": "bundled"}]}
-    config = HATSConfig.model_validate(payload)
+    payload["sources"] = {"tools": [{"id": "reach", "type": "bundled"}]}
+    config = ReachConfig.model_validate(payload)
     assert config.sources.tools[0].path is None
 
 
 def test_bundled_tool_source_rejects_path() -> None:
     payload = _config()
-    payload["sources"] = {"tools": [{"id": "hats", "type": "bundled", "path": "/tools"}]}
+    payload["sources"] = {"tools": [{"id": "reach", "type": "bundled", "path": "/tools"}]}
     with pytest.raises(ValidationError, match="must not configure path"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_filesystem_tool_source_requires_path() -> None:
     payload = _config()
     payload["sources"] = {"tools": [{"id": "local", "type": "filesystem"}]}
     with pytest.raises(ValidationError, match="require path"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_tool_source_ids_must_be_unique() -> None:
@@ -123,7 +123,7 @@ def test_tool_source_ids_must_be_unique() -> None:
         ]
     }
     with pytest.raises(ValidationError, match="duplicate tool source IDs"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_hermes_skill_source_requires_state_projection() -> None:
@@ -132,7 +132,7 @@ def test_hermes_skill_source_requires_state_projection() -> None:
         "skills": [{"id": "hermes", "type": "hermes", "path": "/skills"}]
     }
     with pytest.raises(ValidationError, match="require a state projection"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_hermes_skill_state_target_must_exist() -> None:
@@ -153,7 +153,7 @@ def test_hermes_skill_state_target_must_exist() -> None:
         ]
     }
     with pytest.raises(ValidationError, match="unknown Hermes skill-state targets"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_tooling_registry_path_must_be_absolute() -> None:
@@ -162,23 +162,68 @@ def test_tooling_registry_path_must_be_absolute() -> None:
         "tooling_registry": {"type": "markdown", "path": "relative/registry.md"}
     }
     with pytest.raises(ValidationError, match="tooling registry path must be absolute"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
 
 
 def test_tooling_registry_source_is_optional() -> None:
-    config = HATSConfig.model_validate(_config())
+    config = ReachConfig.model_validate(_config())
     assert config.sources.tooling_registry is None
 
 
 def test_candidate_workspace_path_is_optional_and_must_be_absolute() -> None:
-    config = HATSConfig.model_validate(_config())
+    config = ReachConfig.model_validate(_config())
     assert config.workspace.candidates is None
 
     payload = _config()
-    payload["workspace"]["candidates"] = "/var/lib/hats/candidates"
-    config = HATSConfig.model_validate(payload)
-    assert config.workspace.candidates == "/var/lib/hats/candidates"
+    payload["workspace"]["candidates"] = "/var/lib/reach/candidates"
+    config = ReachConfig.model_validate(payload)
+    assert config.workspace.candidates == "/var/lib/reach/candidates"
 
     payload["workspace"]["candidates"] = "relative/candidates"
     with pytest.raises(ValidationError, match="workspace paths must be absolute"):
-        HATSConfig.model_validate(payload)
+        ReachConfig.model_validate(payload)
+
+
+def test_synchronous_timeout_can_be_stricter_than_execution_timeout() -> None:
+    payload = _config()
+    payload["defaults"] = {
+        "max_timeout_seconds": 300,
+        "max_synchronous_timeout_seconds": 90,
+    }
+    config = ReachConfig.model_validate(payload)
+    target = config.targets["docker"]
+
+    assert config.resolved_max_timeout(target) == 300
+    assert config.resolved_max_synchronous_timeout(target) == 90
+
+
+def test_synchronous_timeout_cannot_exceed_execution_timeout() -> None:
+    payload = _config()
+    payload["defaults"] = {
+        "max_timeout_seconds": 120,
+        "max_synchronous_timeout_seconds": 121,
+    }
+    with pytest.raises(ValidationError, match="synchronous timeout"):
+        ReachConfig.model_validate(payload)
+
+
+def test_executor_socket_is_optional_and_private_local_path() -> None:
+    config = ReachConfig.model_validate(_config())
+    assert config.executor.socket_path is None
+    assert config.executor.max_concurrency == 2
+
+    payload = _config()
+    payload["executor"] = {
+        "socket_path": "/var/lib/reach/executor.sock",
+        "max_concurrency": 3,
+    }
+    config = ReachConfig.model_validate(payload)
+    assert config.executor.socket_path == "/var/lib/reach/executor.sock"
+    assert config.executor.max_concurrency == 3
+
+
+def test_executor_socket_must_be_absolute() -> None:
+    payload = _config()
+    payload["executor"] = {"socket_path": "relative/executor.sock"}
+    with pytest.raises(ValidationError, match="executor socket path must be absolute"):
+        ReachConfig.model_validate(payload)

@@ -5,28 +5,28 @@ ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 RESULTS_ROOT="${BROWSER_RESULTS_ROOT:-${ROOT_DIR}/test-results}"
 RUN_ID="${BROWSER_RUN_ID:-$(date +%s)-$$}"
 BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"
-APP_LOG="${BROWSER_RESULTS_DIR}/hats-ui.log"
+APP_LOG="${BROWSER_RESULTS_DIR}/reach.log"
 PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python:v1.62.0-noble"
-BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/hats-ci-browser.lock}"
+BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/reach-ci-browser.lock}"
 BROWSER_RUN_TIMEOUT_SECONDS="${BROWSER_RUN_TIMEOUT_SECONDS:-600}"
 BROWSER_TEST_TIMEOUT_SECONDS="${BROWSER_TEST_TIMEOUT_SECONDS:-300}"
-NETWORK="hats-browser-${RUN_ID}"
-APP_CONTAINER="hats-browser-app-${RUN_ID}"
-PLAYWRIGHT_CONTAINER="hats-browser-playwright-${RUN_ID}"
-APP_IMAGE="hats-browser-app:${RUN_ID}"
+NETWORK="reach-browser-${RUN_ID}"
+APP_CONTAINER="reach-browser-app-${RUN_ID}"
+PLAYWRIGHT_CONTAINER="reach-browser-playwright-${RUN_ID}"
+APP_IMAGE="reach-browser-app:${RUN_ID}"
 BASE_URL="http://${APP_CONTAINER}:8080"
-if [[ "${HATS_BROWSER_RUN_TIMEOUT_ACTIVE:-0}" != "1" ]]; then
-  export HATS_BROWSER_RUN_TIMEOUT_ACTIVE=1
+if [[ "${REACH_BROWSER_RUN_TIMEOUT_ACTIVE:-0}" != "1" ]]; then
+  export REACH_BROWSER_RUN_TIMEOUT_ACTIVE=1
   exec timeout --signal=TERM --kill-after=30s "${BROWSER_RUN_TIMEOUT_SECONDS}" bash "$0" "$@"
 fi
 
 exec 9>"${BROWSER_LOCK_FILE}"
 if ! flock -n 9; then
-  echo "Another HATS browser acceptance run is already active" >&2
+  echo "Another Hypershell Reach browser acceptance run is already active" >&2
   exit 75
 fi
 
-FIXTURE_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/hats-browser.XXXXXX")"
+FIXTURE_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/reach-browser.XXXXXX")"
 mkdir -p "${BROWSER_RESULTS_DIR}"
 mkdir -p "${FIXTURE_ROOT}/tmp" "${FIXTURE_ROOT}/runs" "${FIXTURE_ROOT}/tasks" \
   "${FIXTURE_ROOT}/trash" "${FIXTURE_ROOT}/candidates" "${FIXTURE_ROOT}/tools" "${FIXTURE_ROOT}/skills/example"
@@ -152,7 +152,7 @@ proposal:
   acceptance:
     - Candidate links to the exact implementation Task and final managed Tool.
 ownership:
-  owner_id: X1pheR/homelab-agent-tooling-skills-mcp
+  owner_id: X1pheR/hypershell-reach
 promotion:
   state: implemented
   rationale: Read-only provenance detail is reusable product behavior.
@@ -229,9 +229,9 @@ network_created=1
 docker create \
   --name "${APP_CONTAINER}" \
   --network "${NETWORK}" \
-  -e HATS_CONFIG=/fixture/config.yaml \
+  -e REACH_CONFIG=/fixture/config.yaml \
   "${APP_IMAGE}" \
-  hats-ui --config /fixture/config.yaml --host 0.0.0.0 --port 8080 >/dev/null
+  reach --config /fixture/config.yaml --host 0.0.0.0 --port 8080 >/dev/null
 app_created=1
 
 docker cp "${FIXTURE_ROOT}/." "${APP_CONTAINER}:/fixture"
@@ -251,7 +251,7 @@ for _ in range(30):
         pass
     time.sleep(1)
 raise SystemExit(1)'; then
-  echo "HATS UI did not become reachable from the browser-test network" >&2
+  echo "Hypershell Reach UI did not become reachable from the browser-test network" >&2
   exit 1
 fi
 
@@ -261,7 +261,7 @@ docker create \
   --ipc=host \
   --network "${NETWORK}" \
   -e RUN_BROWSER_TESTS=1 \
-  -e HATS_BROWSER_BASE_URL="${BASE_URL}" \
+  -e REACH_BROWSER_BASE_URL="${BASE_URL}" \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -e PYTEST_ADDOPTS='-p no:cacheprovider' \
   -w /src \
@@ -289,7 +289,7 @@ test_status=$?
 set -e
 
 if [[ "${test_status}" -eq 124 ]]; then
-  echo "HATS browser acceptance exceeded ${BROWSER_TEST_TIMEOUT_SECONDS}s" >&2
+  echo "Hypershell Reach browser acceptance exceeded ${BROWSER_TEST_TIMEOUT_SECONDS}s" >&2
 fi
 
 docker cp "${PLAYWRIGHT_CONTAINER}:/test-results/browser/." "${BROWSER_RESULTS_DIR}/" 2>/dev/null || true

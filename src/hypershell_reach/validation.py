@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import HATSConfig, load_config
+from .config import ReachConfig, load_config
 from .managed_tools import load_tool_registry, resolve_tool_source_root
 from .skills import inspect_skill_source
 from .tooling_registry import ToolingRegistry
@@ -25,9 +25,9 @@ def _compact_error(exc: Exception) -> str:
 
 
 def _configured_path(path: str | Path | None) -> Path:
-    configured = path if path is not None else os.environ.get("HATS_CONFIG")
+    configured = path if path is not None else os.environ.get("REACH_CONFIG")
     if configured is None or not str(configured).strip():
-        raise RuntimeError("HATS_CONFIG is not set")
+        raise RuntimeError("REACH_CONFIG is not set")
     return Path(configured).expanduser().resolve(strict=False)
 
 
@@ -35,7 +35,7 @@ def _probe_write(directory: Path) -> bool:
     fd: int | None = None
     probe: Path | None = None
     try:
-        fd, probe_text = tempfile.mkstemp(prefix=".hats-validate-", dir=directory)
+        fd, probe_text = tempfile.mkstemp(prefix=".reach-validate-", dir=directory)
         probe = Path(probe_text)
         os.close(fd)
         fd = None
@@ -83,7 +83,7 @@ def _readable_file(path: Path) -> tuple[bool, str]:
         return True, "present, readable"
 
 
-def _target_lines(config: HATSConfig) -> tuple[list[str], int]:
+def _target_lines(config: ReachConfig) -> tuple[list[str], int]:
     enabled = [(target_id, target) for target_id, target in sorted(config.targets.items()) if target.enabled]
     lines = ["Targets", "  Status: valid", f"  Enabled: {len(enabled)}"]
     for target_id, target in enabled:
@@ -95,12 +95,23 @@ def _target_lines(config: HATSConfig) -> tuple[list[str], int]:
                 f"    Host: {target.ssh.host}",
                 f"    User: {target.ssh.user}",
                 f"    Capabilities: {', '.join(target.capabilities) if target.capabilities else 'none'}",
+                f"    Execution timeout: {config.resolved_max_timeout(target)}s",
+                f"    Synchronous timeout: {config.resolved_max_synchronous_timeout(target)}s",
             ]
         )
     return lines, 0
 
 
-def _tool_source_lines(config: HATSConfig) -> tuple[list[str], int]:
+
+def _executor_lines(config: ReachConfig) -> tuple[list[str], int]:
+    return [
+        "Execution manager",
+        "  Status: integrated",
+        f"  Max concurrency: {config.executor.max_concurrency}",
+    ], 0
+
+
+def _tool_source_lines(config: ReachConfig) -> tuple[list[str], int]:
     enabled = [source for source in config.sources.tools if source.enabled]
     details: list[tuple[object, int | None, str | None]] = []
     total_scripts = 0
@@ -148,7 +159,7 @@ def _tool_source_lines(config: HATSConfig) -> tuple[list[str], int]:
     return lines, errors
 
 
-def _skill_source_lines(config: HATSConfig) -> tuple[list[str], int]:
+def _skill_source_lines(config: ReachConfig) -> tuple[list[str], int]:
     enabled = [source for source in config.sources.skills if source.enabled]
     details: list[tuple[object, dict[str, object] | None, str | None]] = []
     total_skills = 0
@@ -197,7 +208,7 @@ def _skill_source_lines(config: HATSConfig) -> tuple[list[str], int]:
     return lines, errors
 
 
-def _tooling_registry_lines(config: HATSConfig) -> tuple[list[str], int]:
+def _tooling_registry_lines(config: ReachConfig) -> tuple[list[str], int]:
     source = config.sources.tooling_registry
     if source is None or not source.enabled:
         return ["Tooling registry", "  Status: not configured"], 0
@@ -218,7 +229,7 @@ def _tooling_registry_lines(config: HATSConfig) -> tuple[list[str], int]:
     ], 0
 
 
-def _workspace_lines(config: HATSConfig) -> tuple[list[str], int]:
+def _workspace_lines(config: ReachConfig) -> tuple[list[str], int]:
     checks: list[tuple[str, str, bool, str]] = []
     errors = 0
     all_writable = True
@@ -247,7 +258,7 @@ def _workspace_lines(config: HATSConfig) -> tuple[list[str], int]:
     return lines, errors
 
 
-def _ssh_lines(config: HATSConfig) -> tuple[list[str], int]:
+def _ssh_lines(config: ReachConfig) -> tuple[list[str], int]:
     errors = 0
     executable_ok = _SSH_EXECUTABLE.is_file() and os.access(_SSH_EXECUTABLE, os.X_OK)
     if not executable_ok:
@@ -284,7 +295,7 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
     except RuntimeError as exc:
         text = "\n".join(
             [
-                "HATS configuration validation",
+                "Hypershell Reach configuration validation",
                 "",
                 "Configuration",
                 "  Status: invalid",
@@ -301,7 +312,7 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
     except RuntimeError as exc:
         text = "\n".join(
             [
-                "HATS configuration validation",
+                "Hypershell Reach configuration validation",
                 "",
                 "Configuration",
                 "  Status: invalid",
@@ -316,7 +327,7 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
 
     sections: list[list[str]] = [
         [
-            "HATS configuration validation",
+            "Hypershell Reach configuration validation",
             "",
             "Configuration",
             "  Status: valid",
@@ -326,6 +337,7 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
     error_count = 0
     for builder in (
         _workspace_lines,
+        _executor_lines,
         _target_lines,
         _tool_source_lines,
         _skill_source_lines,

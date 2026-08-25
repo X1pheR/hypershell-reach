@@ -121,6 +121,14 @@ def classify_status(*, timed_out: bool, exit_code: int | None) -> str:
     return "remote_error"
 
 
+async def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
 async def run_ssh(
     *,
     target_id: str,
@@ -166,11 +174,11 @@ async def run_ssh(
         await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
     except TimeoutError:
         timed_out = True
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        await process.wait()
+        await _kill_process_group(process)
+    except asyncio.CancelledError:
+        await _kill_process_group(process)
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        raise
 
     stdout = await stdout_task
     stderr = await stderr_task

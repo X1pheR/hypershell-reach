@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: HATS
+name: Hypershell Reach
 description: Small read-only server-rendered Hypershell interface for agent tooling and skills, with no writer or SPA boundary.
 colors:
   primary: "#3C6CFE"
@@ -117,13 +117,13 @@ components:
     padding: "{spacing.sm}"
 ---
 
-# HATS Design
+# Hypershell Reach Design
 
 ## Overview
 
-This file is the repository-local projection of the canonical Hypershell application-family visual contract at `_meta/operating-models/web-ui/DESIGN.md`. Shared family tokens and equivalent interaction recipes are synchronized deliberately; this repository owns only HATS-specific product decisions.
+This file is the repository-local projection of the canonical Hypershell application-family visual contract at `_meta/operating-models/web-ui/DESIGN.md`. Shared family tokens and equivalent interaction recipes are synchronized deliberately; this repository owns only Hypershell Reach-specific product decisions.
 
-HATS stays small, read-only, server-rendered and operational. Family conformance does not justify a SPA, frontend framework, client-side state store, configuration writer, global-search subsystem or broader information-exposure boundary.
+Hypershell Reach stays small, read-only, server-rendered and operational. Family conformance does not justify a SPA, frontend framework, client-side state store, configuration writer, global-search subsystem or broader information-exposure boundary.
 
 ## Colors
 
@@ -139,9 +139,9 @@ Keep the compact server-rendered topbar and routeable primary destinations. At 3
 
 ## Components
 
-**Brand lockup.** Use `Hypershell` as the primary line and `HATS` as the secondary product line. Preserve both lines on mobile.
+**Brand lockup.** Use `Hypershell` as the primary line and `Hypershell Reach` as the secondary product line. Preserve both lines on mobile.
 
-**Product mark.** Retain the hat silhouette with three connected nodes. The mark identifies HATS and is not reused as a generic shell-action icon.
+**Product mark.** Retain the hat silhouette with three connected nodes. The mark identifies Hypershell Reach and is not reused as a generic shell-action icon.
 
 **Capability versus runtime.** `Read-only` is a capability/mode badge. It is not runtime health. Runtime/dependency availability must be communicated separately when operationally meaningful.
 

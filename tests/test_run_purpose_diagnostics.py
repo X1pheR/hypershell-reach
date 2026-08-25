@@ -5,10 +5,11 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from hats_mcp import server
-from hats_mcp.config import HATSConfig
-from hats_mcp.runs import (
+from hypershell_reach import server
+from hypershell_reach.config import ReachConfig
+from hypershell_reach.runs import (
     PURPOSE_MAX_LENGTH,
+    RUN_SCHEMA_VERSION,
     RESULT_SUMMARY_MAX_LENGTH,
     RESULT_SUMMARY_TRUNCATION_SUFFIX,
     RunRecord,
@@ -17,8 +18,8 @@ from hats_mcp.runs import (
 )
 
 
-def _config(tmp_path) -> HATSConfig:
-    return HATSConfig.model_validate(
+def _config(tmp_path) -> ReachConfig:
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {
@@ -94,7 +95,7 @@ async def test_agent_run_persists_trimmed_purpose_and_returns_it_from_run_apis(
     run_id = json.loads(response[0].text)["run_id"]
     record = store.get(run_id)
 
-    assert record.schema_version == 2
+    assert record.schema_version == RUN_SCHEMA_VERSION
     assert record.purpose == "Verify the selected runtime can execute a bounded probe."
     assert record.operation == "run_command"
     assert record.purpose != record.operation

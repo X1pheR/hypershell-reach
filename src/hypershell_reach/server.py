@@ -19,8 +19,9 @@ from .candidates import (
     CandidateState,
     CandidateStore,
 )
-from .config import HATSConfig, load_config
+from .config import ReachConfig, load_config
 from .execution import run_ssh
+from .executor import ExecutorService, ExecutionSubmission, cancel_execution, submit_execution
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .skills import (
     HermesState,
@@ -37,11 +38,12 @@ from .runs import PURPOSE_MAX_LENGTH, RunOperation, RunStatus, RunStore, normali
 from .tasks import TaskContinuity, TaskStatus, TaskStore
 from .tooling_registry import ToolingRegistry
 
-app = Server("hats")
-_config: HATSConfig
+app = Server("hypershell-reach")
+_config: ReachConfig
 _run_store_instance: RunStore | None = None
 _task_store_instance: TaskStore | None = None
 _candidate_store_instance: CandidateStore | None = None
+_executor_service: ExecutorService | None = None
 _skill_registry_cache: SkillRegistry | None = None
 _skill_registry_cache_at = 0.0
 _skill_registry_cache_config_signature: str | None = None
@@ -153,6 +155,13 @@ class RetainRunInput(BaseModel):
 
     run_id: str = Field(min_length=1, max_length=128)
     retained: bool
+
+
+class CancelRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=128)
+    confirm: bool = False
 
 
 class ListTasksInput(BaseModel):
@@ -303,13 +312,25 @@ class CompleteCandidateInput(BaseModel):
     final_reference: CandidateReference
 
 
-def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
+def _target_runtime(
+    target_id: str,
+    requested_timeout: int,
+    *,
+    synchronous: bool = True,
+) -> tuple[Any, int, int]:
     target = _config.enabled_target(target_id)
     max_timeout = _config.resolved_max_timeout(target)
     if requested_timeout > max_timeout:
         raise ValueError(
             f"timeout_seconds exceeds configured maximum for {target_id}: {max_timeout}"
         )
+    if synchronous:
+        max_synchronous = _config.resolved_max_synchronous_timeout(target)
+        if requested_timeout > max_synchronous:
+            raise ValueError(
+                f"timeout_seconds exceeds configured synchronous maximum for {target_id}: "
+                f"{max_synchronous}; use start_command/start_shell/start_script for longer work"
+            )
     return (
         target,
         _config.resolved_connect_timeout(target),
@@ -327,6 +348,7 @@ def _run_store() -> RunStore:
         _run_store_instance = RunStore(
             _config.workspace.runs,
             completed_days=_config.retention.runs.completed_days,
+            reconcile_modes={"sync"},
         )
         _run_store_instance.cleanup()
     return _run_store_instance
@@ -343,6 +365,23 @@ def _task_store() -> TaskStore:
         _task_store_instance.repair()
         _task_store_instance.cleanup()
     return _task_store_instance
+
+
+def set_executor_service(service: ExecutorService | None) -> None:
+    global _executor_service
+    _executor_service = service
+
+
+async def _submit_async_execution(submission: ExecutionSubmission) -> dict[str, object]:
+    if _executor_service is not None:
+        return _executor_service.submit(submission)
+    return await submit_execution(_config, submission)
+
+
+async def _cancel_async_execution(run_id: str) -> dict[str, object]:
+    if _executor_service is not None:
+        return await _executor_service.cancel(run_id)
+    return await cancel_execution(_config, run_id)
 
 
 def _candidate_store() -> CandidateStore:
@@ -603,13 +642,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_candidates",
-            description="List HATS-owned structured Candidate records when Candidate storage is configured.",
+            description="List Hypershell Reach-owned structured Candidate records when Candidate storage is configured.",
             inputSchema=ListCandidatesInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
         ),
         types.Tool(
             name="get_candidate",
-            description="Return one HATS-owned structured Candidate record.",
+            description="Return one Hypershell Reach-owned structured Candidate record.",
             inputSchema=GetCandidateInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
         ),
@@ -648,7 +687,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="link_candidate_task",
-            description="Link an approved Candidate to an existing HATS implementation Task using stable IDs only.",
+            description="Link an approved Candidate to an existing Hypershell Reach implementation Task using stable IDs only.",
             inputSchema=LinkCandidateTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
         ),
@@ -661,7 +700,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_targets",
             description=(
-                "List configured HATS target IDs, capabilities and execution limits. "
+                "List configured Hypershell Reach target IDs, capabilities and execution limits. "
                 "Connection addresses, usernames and credential paths are not returned."
             ),
             inputSchema=EmptyInput.model_json_schema(),
@@ -703,7 +742,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_runs",
             description=(
-                "List persisted HATS execution records with execution purpose and bounded result "
+                "List persisted Hypershell Reach execution records with execution purpose and bounded result "
                 "summary when present. Historical records may return purpose=null and "
                 "result_summary=null. Run records never contain command text, scripts, argument "
                 "values, environment values or output content."
@@ -719,7 +758,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="get_run",
             description=(
-                "Return one persisted HATS execution record. New agent-initiated records include "
+                "Return one persisted Hypershell Reach execution record. New agent-initiated records include "
                 "purpose and a bounded server-generated result_summary; historical records may "
                 "return null for both. Raw execution content is never persisted."
             ),
@@ -735,7 +774,7 @@ async def list_tools() -> list[types.Tool]:
             name="set_run_retained",
             description=(
                 "Set or clear the retention override for one run record. This changes only local "
-                "HATS state and does not execute a remote operation."
+                "Hypershell Reach state and does not execute a remote operation."
             ),
             inputSchema=RetainRunInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -748,7 +787,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="list_tasks",
             description=(
-                "List HATS task-continuity records. Tasks are local continuity state, not "
+                "List Hypershell Reach task-continuity records. Tasks are local continuity state, not "
                 "projects or execution authorization."
             ),
             inputSchema=ListTasksInput.model_json_schema(),
@@ -761,7 +800,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="get_task",
-            description="Return one HATS task-continuity record.",
+            description="Return one Hypershell Reach task-continuity record.",
             inputSchema=GetTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=True,
@@ -787,7 +826,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="update_task",
             description=(
-                "Update one current HATS task record. Terminal task status cannot be reopened."
+                "Update one current Hypershell Reach task record. Terminal task status cannot be reopened."
             ),
             inputSchema=UpdateTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -800,7 +839,7 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="close_task",
             description=(
-                "Atomically close one HATS task as completed or cancelled, persist the final "
+                "Atomically close one Hypershell Reach task as completed or cancelled, persist the final "
                 "record, and move it from the active root to the archive root. Retries of the "
                 "same committed final state are idempotent."
             ),
@@ -845,6 +884,40 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="start_script",
+            description=(
+                "Submit one registered managed script for durable asynchronous execution and return "
+                "a Run ID immediately. The managed-tool registry still owns script content, typed "
+                "arguments, target capabilities, timeout, mutation and idempotency metadata. The "
+                "executor owns accepted work independently of the MCP request; use get_run/list_runs "
+                "to poll terminal state. purpose must explain why the execution exists and remain "
+                "secret-free, one printable line of at most 512 characters."
+            ),
+            inputSchema=RunScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="cancel_run",
+            description=(
+                "Explicitly cancel one running asynchronous Hypershell Reach Run owned by the executor. "
+                "Requires confirm=true. Caller or MCP transport disconnection never implies "
+                "cancellation; repeated cancellation of an already terminal Run is safe and does "
+                "not execute work again."
+            ),
+            inputSchema=CancelRunInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
             name="run_command",
             description=(
                 "Run one non-interactive command on a configured target. purpose must explain "
@@ -855,6 +928,42 @@ async def list_tools() -> list[types.Tool]:
                 "Commands are never retried automatically."
             ),
             inputSchema=CommandInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="start_command",
+            description=(
+                "Submit one non-interactive command for durable asynchronous execution on a configured "
+                "target and return a Run ID immediately. The executor owns accepted work independently "
+                "of the MCP request; use get_run/list_runs to poll terminal state. purpose must explain "
+                "why the execution exists and remain secret-free, one printable line of at most 512 "
+                "characters. Use this when the requested "
+                "execution can outlive the configured synchronous transport-safe ceiling."
+            ),
+            inputSchema=CommandInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="start_shell",
+            description=(
+                "Submit bounded sh or bash input for durable asynchronous execution and return a Run "
+                "ID immediately. The executor owns accepted work independently of the MCP request; "
+                "use get_run/list_runs to poll terminal state. purpose must explain why the execution "
+                "exists and remain secret-free, one printable line of at most 512 characters. Use this "
+                "when shell work can outlive the configured synchronous "
+                "transport-safe ceiling."
+            ),
+            inputSchema=ShellInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=True,
@@ -1044,6 +1153,7 @@ async def call_tool(
                         "capabilities": target.capabilities,
                         "enabled": target.enabled,
                         "max_timeout_seconds": _config.resolved_max_timeout(target),
+                        "max_synchronous_timeout_seconds": _config.resolved_max_synchronous_timeout(target),
                         "max_output_bytes": _config.resolved_max_output(target),
                     }
                     for target_id, target in sorted(_config.targets.items())
@@ -1167,6 +1277,53 @@ async def call_tool(
                 "idempotent": script.metadata.idempotent,
                 "execution": execution,
             }
+        elif name == "start_script":
+            args = RunScriptInput(**arguments)
+            script = _tool_registry().get(args.script_id)
+            target, _, _ = _target_runtime(
+                args.target, script.metadata.timeout_seconds, synchronous=False
+            )
+            ensure_target_compatible(script, target.capabilities)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await _submit_async_execution(
+                ExecutionSubmission(
+                    operation="run_script",
+                    target=args.target,
+                    remote_command=build_script_command(script, args.arguments),
+                    stdin_text=script.content,
+                    timeout_seconds=script.metadata.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=script.metadata.mutating,
+                    idempotent=script.metadata.idempotent,
+                    task_id=args.task_id,
+                    script_id=script.metadata.id,
+                    script_source=script.source_id,
+                    script_sha256=script.sha256,
+                    argument_names=list(args.arguments),
+                ),
+            )
+        elif name == "cancel_run":
+            args = CancelRunInput(**arguments)
+            if not args.confirm:
+                raise ValueError("cancel_run requires confirm=true")
+            result = await _cancel_async_execution(args.run_id)
+        elif name == "start_command":
+            args = CommandInput(**arguments)
+            _target_runtime(args.target, args.timeout_seconds, synchronous=False)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await _submit_async_execution(
+                ExecutionSubmission(
+                    operation="run_command",
+                    target=args.target,
+                    remote_command=args.command,
+                    timeout_seconds=args.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=True,
+                    task_id=args.task_id,
+                ),
+            )
         elif name == "run_command":
             args = CommandInput(**arguments)
             target, connect_timeout, max_output = _target_runtime(
@@ -1185,6 +1342,23 @@ async def call_tool(
                 task_id=args.task_id,
             )
             result = {"run_id": run_id, "execution": execution}
+        elif name == "start_shell":
+            args = ShellInput(**arguments)
+            _target_runtime(args.target, args.timeout_seconds, synchronous=False)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await _submit_async_execution(
+                ExecutionSubmission(
+                    operation="run_shell",
+                    target=args.target,
+                    remote_command=f"{args.interpreter} -s --",
+                    stdin_text=args.script,
+                    timeout_seconds=args.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=True,
+                    task_id=args.task_id,
+                ),
+            )
         elif name == "run_shell":
             args = ShellInput(**arguments)
             target, connect_timeout, max_output = _target_runtime(
@@ -1222,13 +1396,12 @@ async def call_tool(
     ]
 
 
-async def run_stdio() -> None:
-    from mcp.server.stdio import stdio_server
-
-    global _config, _run_store_instance, _task_store_instance, _candidate_store_instance
+def initialize_runtime(config: ReachConfig, *, executor_service: ExecutorService | None = None) -> None:
+    global _config, _run_store_instance, _task_store_instance, _candidate_store_instance, _executor_service
     global _skill_registry_cache, _skill_registry_cache_at
     global _skill_registry_cache_config_signature, _skill_registry_cache_source_snapshot
-    _config = load_config()
+    _config = config
+    set_executor_service(executor_service)
     _skill_registry_cache = None
     _skill_registry_cache_at = 0.0
     _skill_registry_cache_config_signature = None
@@ -1236,6 +1409,7 @@ async def run_stdio() -> None:
     _run_store_instance = RunStore(
         _config.workspace.runs,
         completed_days=_config.retention.runs.completed_days,
+        reconcile_modes={"sync"},
     )
     _run_store_instance.cleanup()
     _task_store_instance = TaskStore(
@@ -1251,6 +1425,11 @@ async def run_stdio() -> None:
         else None
     )
 
+
+async def run_stdio() -> None:
+    from mcp.server.stdio import stdio_server
+
+    initialize_runtime(load_config())
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 

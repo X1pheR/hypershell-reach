@@ -1,10 +1,10 @@
-# HATS User Guide
+# Hypershell Reach User Guide
 
-## What HATS is
+## What Hypershell Reach is
 
-HATS stands for **Homelab Agent Tooling & Skills**. It gives agents controlled access to homelab systems, reusable tools, run history, cross-session task state and shared Agent Skills.
+Hypershell Reach stands for **Hypershell Reach**. It gives agents controlled access to homelab systems, reusable tools, run history, cross-session task state and shared Agent Skills.
 
-The Web UI is a **read-only companion** to the MCP service. Use it to see what HATS knows and what happened recently. The UI does not authorize or start remote actions, edit configuration, create tasks or change retained state.
+The Web UI is a **read-only companion** to the MCP service. Use it to see what Hypershell Reach knows and what happened recently. The UI does not authorize or start remote actions, edit configuration, create tasks or change retained state.
 
 ## Overview
 
@@ -14,7 +14,7 @@ Use it to spot unavailable sources or recent failures before opening a detailed 
 
 ## Targets
 
-Targets are the configured systems HATS can connect to through its controlled execution path.
+Targets are the configured systems Hypershell Reach can connect to through its controlled execution path.
 
 The Targets view shows safe metadata such as:
 
@@ -32,7 +32,7 @@ Tooling contains two related sections.
 
 ### Managed tools
 
-Managed tools are registered, reviewed actions that HATS can run through its managed-tool path. The UI shows their safe metadata, including purpose, source, domain, interpreter, requirements, whether they can change state and whether repeated execution is expected to be safe.
+Managed tools are registered, reviewed actions that Hypershell Reach can run through its managed-tool path. The UI shows their safe metadata, including purpose, source, domain, interpreter, requirements, whether they can change state and whether repeated execution is expected to be safe.
 
 The UI does not display tool source code or deployment filesystem paths.
 
@@ -44,7 +44,7 @@ Keeping candidates beside Managed tools shows what may be automated next without
 
 ## Runs
 
-A Run is the stored summary of one HATS execution attempt. The Runs view helps answer questions such as:
+A Run is the stored summary of one Hypershell Reach execution attempt. The Runs view helps answer questions such as:
 
 - what operation was attempted;
 - which configured target it used;
@@ -55,7 +55,7 @@ A Run is the stored summary of one HATS execution attempt. The Runs view helps a
 
 Each Run opens a read-only detail page. For current records it shows the human-readable purpose separately from the technical operation or managed tool, plus target, status, timing, bounded result summary and secret-safe diagnostics. When a Run has a `task_id`, the Task reference links back to the exact Task detail page. Historical Runs without purpose remain readable and are labelled accordingly.
 
-HATS does not persist command bodies, argument values or command output in the Run record, so the Web UI cannot expose them later.
+Hypershell Reach does not persist command bodies, argument values or command output in the Run record, so the Web UI cannot expose them later.
 
 ## Tasks
 
@@ -67,7 +67,7 @@ The Tasks list remains compact, while each Task opens a read-only detail page co
 
 Skills are read-only Agent Skill packages that help agents follow reusable workflows and conventions.
 
-The Skills view shows configured skill content and where it came from. For sources that need a live adapter to determine effective enablement, the browser may show readable content without claiming that the skill is currently active. The `hats-mcp` skill tools remain authoritative for the live effective catalog.
+The Skills view shows configured skill content and where it came from. For sources that need a live adapter to determine effective enablement, the browser may show readable content without claiming that the skill is currently active. The Reach MCP skill tools remain authoritative for the live effective catalog.
 
 ## Help
 
@@ -90,7 +90,7 @@ The UI does not render:
 - command text, argument values or command output;
 - unrestricted or secret-bearing Task content outside the bounded Task continuity schema.
 
-Authentication, TLS, DNS and ingress policy are deployment concerns outside the generic HATS product.
+Authentication, TLS, DNS and ingress policy are deployment concerns outside the generic Hypershell Reach product.
 
 ## Understanding states
 
@@ -107,9 +107,9 @@ A reachable target or available browser page is not by itself proof that a compl
 
 ### Can I run a command from the Web UI?
 
-No. The maintained HATS Web UI is read-only. Execution remains on the MCP/admin path and still depends on caller authorization.
+No. The maintained Hypershell Reach Web UI is read-only. Execution remains on the MCP/admin path and still depends on caller authorization.
 
-### Can I edit HATS configuration in the Web UI?
+### Can I edit Hypershell Reach configuration in the Web UI?
 
 No. Deployment-owned YAML and related desired state remain the configuration authority.
 

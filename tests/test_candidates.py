@@ -4,7 +4,7 @@ import yaml
 import pytest
 from pydantic import ValidationError
 
-from hats_mcp.candidates import CandidateRecord
+from hypershell_reach.candidates import CandidateRecord
 
 
 def candidate_payload(candidate_id: str = "ATR-022") -> dict:
@@ -37,7 +37,7 @@ def candidate_payload(candidate_id: str = "ATR-022") -> dict:
                 "Returns a deterministic pass/fail result for every declared precondition."
             ],
         },
-        "ownership": {"owner_id": "X1pheR/homelab-agent-tooling-skills-mcp"},
+        "ownership": {"owner_id": "X1pheR/hypershell-reach"},
         "promotion": {
             "state": "candidate",
             "rationale": "The recurring bounded workflow is reusable and deterministic.",
@@ -87,7 +87,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import stat
 
-from hats_mcp.candidates import (
+from hypershell_reach.candidates import (
     CandidateOwnership,
     CandidateProblem,
     CandidateProposal,
@@ -144,7 +144,7 @@ def test_candidate_store_rejects_duplicate_candidate_ids(tmp_path) -> None:
 
 
 def test_candidate_store_fsyncs_file_and_parent_directory(tmp_path, monkeypatch) -> None:
-    import hats_mcp.candidates as candidates_module
+    import hypershell_reach.candidates as candidates_module
 
     fsynced_modes: list[int] = []
     real_fsync = os.fsync
@@ -181,7 +181,7 @@ def test_concurrent_candidate_updates_cannot_silently_lose_state(tmp_path) -> No
     assert committed.revision == 2
     assert committed.title in {"First", "Second"}
 
-from hats_mcp.candidates import CandidateReference
+from hypershell_reach.candidates import CandidateReference
 
 
 def test_explicit_approval_transition_works(tmp_path) -> None:
@@ -264,7 +264,7 @@ def test_candidate_task_reference_validates_safely(tmp_path) -> None:
 
 
 def test_candidate_atomic_write_failure_preserves_committed_record(tmp_path, monkeypatch) -> None:
-    import hats_mcp.candidates as candidates_module
+    import hypershell_reach.candidates as candidates_module
 
     store = CandidateStore(tmp_path / "candidates")
     original = create_candidate(store)

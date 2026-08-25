@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from hats_mcp.tooling_registry import ToolingRegistry
+from hypershell_reach.tooling_registry import ToolingRegistry
 
 
 def _registry(tmp_path):

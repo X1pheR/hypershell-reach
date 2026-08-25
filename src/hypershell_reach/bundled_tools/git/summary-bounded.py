@@ -138,7 +138,7 @@ def summarize(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     if not repo.is_dir():
         return error_payload("repository directory does not exist"), 2
 
-    with tempfile.TemporaryDirectory(prefix="hats-git-summary-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="reach-git-summary-") as temporary:
         home = Path(temporary) / "home"
         home.mkdir()
         environment = git_environment(home)

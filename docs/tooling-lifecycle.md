@@ -1,6 +1,6 @@
 # Tooling Lifecycle
 
-HATS should reduce repeated operational friction without turning every incident into permanent machinery.
+Hypershell Reach should reduce repeated operational friction without turning every incident into permanent machinery.
 
 ## Intake flow
 
@@ -8,7 +8,7 @@ HATS should reduce repeated operational friction without turning every incident 
 2. Fix isolated mistakes locally without adding reusable machinery.
 3. If the issue is recurring or generalizable, record evidence in the deployment's failure registry or equivalent governed evidence store.
 4. Check whether an existing structured MCP capability already solves the problem.
-5. Check whether an existing HATS managed tool or configured private deployment tool solves it.
+5. Check whether an existing Hypershell Reach managed tool or configured private deployment tool solves it.
 6. Check whether the narrow owning application or domain already provides a suitable operator helper.
 7. Extend the narrowest existing capability when that remains simpler than adding another tool.
 8. Create a new reusable tool or helper only when the earlier options are insufficient.
@@ -17,9 +17,9 @@ HATS should reduce repeated operational friction without turning every incident 
 
 ## Ownership
 
-- Generic reusable agent capability belongs in the HATS product repository.
+- Generic reusable agent capability belongs in the Hypershell Reach product repository.
 - Deployment-specific non-secret configuration, target inventory, source bindings and private managed-tool extensions belong by default in the deployment's existing private infrastructure or configuration source.
-- Do not create a dedicated private HATS overlay repository solely to keep deployment configuration private. Use a separate private repository only when an independent lifecycle, ownership or security boundary requires one.
+- Do not create a dedicated private Hypershell Reach overlay repository solely to keep deployment configuration private. Use a separate private repository only when an independent lifecycle, ownership or security boundary requires one.
 - Application-specific behavior belongs in the application repository.
 - Domain operator helpers belong with the domain or infrastructure source that owns their lifecycle.
 - Governance validators belong with the governance source they validate.
@@ -42,15 +42,15 @@ Promotion remains a reviewed decision. A registry can surface candidates automat
 
 ## Candidate lifecycle
 
-HATS owns Candidate **state mechanics**, not source-code generation, Git workflow, or authorization policy. Candidate records are structured YAML state when `workspace.candidates` is configured; managed-tool source remains in the owning product or deployment repository.
+Hypershell Reach owns Candidate **state mechanics**, not source-code generation, Git workflow, or authorization policy. Candidate records are structured YAML state when `workspace.candidates` is configured; managed-tool source remains in the owning product or deployment repository.
 
 A Candidate must preserve enough intent to survive chat loss: recurring problem, cause and evidence; proposed capability and optional managed-tool ID; required inputs and expected outputs; safety/mutation boundary; stable owner ID; deterministic acceptance postconditions; promotion rationale; and optional implementation Task/final capability references. Candidate state must not contain credential or secret values.
 
-The state set is intentionally small: `candidate`, `approved`, `blocked`, `not-warranted`, `implemented`, and `automated`. `approved` means an operator has explicitly authorized implementation. The existence of `approve_candidate` never grants that authorization; callers must establish it outside HATS before invoking the transition. Generic `update_candidate` cannot change lifecycle state.
+The state set is intentionally small: `candidate`, `approved`, `blocked`, `not-warranted`, `implemented`, and `automated`. `approved` means an operator has explicitly authorized implementation. The existence of `approve_candidate` never grants that authorization; callers must establish it outside Hypershell Reach before invoking the transition. Generic `update_candidate` cannot change lifecycle state.
 
 Every mutation uses an `expected_revision` CAS. Candidate writes are serialized by a per-Candidate interprocess lock, written to a same-directory temporary file, file-fsynced, atomically replaced, and followed by parent-directory fsync. A stale writer fails rather than silently overwriting committed state.
 
-After approval, `link_candidate_task` can reference an existing HATS Task. Completion records either `implemented` or `automated` plus one stable final `managed-tool` or `capability` reference. Managed-tool references are checked against the effective ToolRegistry before completion. HATS does not persist physical implementation paths when stable owner/tool identifiers are sufficient.
+After approval, `link_candidate_task` can reference an existing Hypershell Reach Task. Completion records either `implemented` or `automated` plus one stable final `managed-tool` or `capability` reference. Managed-tool references are checked against the effective ToolRegistry before completion. Hypershell Reach does not persist physical implementation paths when stable owner/tool identifiers are sufficient.
 
 ## Legacy tooling-registry compatibility
 

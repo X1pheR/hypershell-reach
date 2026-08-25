@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 DESIGN = ROOT / "DESIGN.md"
-UI_ASSETS = (ROOT / "src" / "hats_mcp" / "ui_assets.py").read_text(encoding="utf-8").lower()
+UI_ASSETS = (ROOT / "src" / "hypershell_reach" / "ui_assets.py").read_text(encoding="utf-8").lower()
 
 CANONICAL_COLORS = {
     "page": "#050816",
@@ -53,14 +53,14 @@ def test_runtime_css_keeps_canonical_shared_core_palette() -> None:
 
 
 def test_shell_uses_family_brand_and_neutral_read_only_mode_badge() -> None:
-    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
-    assert '<span class="brand-copy"><strong>Hypershell</strong><small>HATS</small></span>' in ui
+    ui = (ROOT / "src" / "hypershell_reach" / "ui.py").read_text(encoding="utf-8")
+    assert '<span class="brand-copy"><strong>Hypershell</strong><small>Hypershell Reach</small></span>' in ui
     assert 'class="mode-badge" aria-label="Mode: Read-only">Read-only</span>' in ui
     assert 'utility-dot' not in ui
 
 
 def test_help_is_utility_destination_and_runtime_availability_is_not_mode() -> None:
-    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    ui = (ROOT / "src" / "hypershell_reach" / "ui.py").read_text(encoding="utf-8")
     assert '("Documentation", "/docs")' not in ui
     assert 'href="/help"' in ui
     assert 'aria-label="Help"' in ui
@@ -71,7 +71,7 @@ def test_help_is_utility_destination_and_runtime_availability_is_not_mode() -> N
 
 
 def test_growing_read_only_tables_have_server_rendered_discovery_controls() -> None:
-    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
+    ui = (ROOT / "src" / "hypershell_reach" / "ui.py").read_text(encoding="utf-8")
     for marker in ("table-controls", "table-search", "table-filter", "table-pagination", "aria-sort"):
         assert marker in ui
     assert 'request.query_params' in ui
@@ -89,8 +89,8 @@ def test_responsive_tables_preserve_values_as_semantic_mobile_records() -> None:
 
 
 def test_filter_forms_preserve_strict_form_action_csp_via_same_origin_script_navigation() -> None:
-    ui = (ROOT / "src" / "hats_mcp" / "ui.py").read_text(encoding="utf-8")
-    assets = (ROOT / "src" / "hats_mcp" / "ui_assets.py").read_text(encoding="utf-8")
+    ui = (ROOT / "src" / "hypershell_reach" / "ui.py").read_text(encoding="utf-8")
+    assets = (ROOT / "src" / "hypershell_reach" / "ui_assets.py").read_text(encoding="utf-8")
     assert "form-action 'none'" in ui
     assert 'document.querySelectorAll(".table-controls")' in assets
     assert 'event.preventDefault()' in assets

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-HATS_MARK_SVG = """<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" role=\"img\" aria-label=\"HATS product mark\">
+REACH_MARK_SVG = """<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" role=\"img\" aria-label=\"Hypershell Reach product mark\">
   <path d=\"M17.2 11.5h13.6L35 29.1c1.9-.5 3.8-1.2 5.6-2a2.1 2.1 0 0 1 1.7 3.9C37 33.4 30.9 34.6 24 34.6S11 33.4 5.7 31a2.1 2.1 0 0 1 1.7-3.9c1.8.8 3.7 1.5 5.6 2l4.2-17.6Z\" fill=\"#17233c\" stroke=\"#7185a8\" stroke-width=\"2\" stroke-linejoin=\"round\"/>
   <path d=\"M16 25.2h16\" fill=\"none\" stroke=\"#607692\" stroke-width=\"2\" stroke-linecap=\"round\"/>
   <circle cx=\"17.5\" cy=\"25.2\" r=\"2.35\" fill=\"#ff2093\"/>
@@ -91,6 +91,33 @@ button { font: inherit; cursor: pointer; }
   border-bottom: 1px solid var(--border);
   background: rgb(5 8 22 / 94%);
   backdrop-filter: blur(14px);
+}
+.navigation-progress {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.navigation-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -34%;
+  width: 34%;
+  background: linear-gradient(90deg, transparent, var(--secondary), var(--accent), var(--accent-strong), transparent);
+  box-shadow: 0 0 10px rgb(103 232 249 / 35%);
+}
+html.is-navigating .navigation-progress { opacity: 1; }
+html.is-navigating .navigation-progress::after { animation: reach-navigation-progress 900ms ease-in-out infinite; }
+@keyframes reach-navigation-progress {
+  from { transform: translateX(0); }
+  to { transform: translateX(395%); }
 }
 .header-leading, .brand, .header-actions, .page-heading-row, .section-heading, .mobile-sheet-heading { display: flex; align-items: center; }
 .header-leading { min-width: 0; gap: .6rem; }
@@ -312,6 +339,7 @@ code { font-size: .86em; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  html.is-navigating .navigation-progress::after { left: 0; width: 100%; transform: none; animation: none; }
 }
 @media (forced-colors: active) {
   .destination-card::before, .panel-accent::before { background: CanvasText; }
@@ -321,6 +349,37 @@ code { font-size: .86em; }
 
 JAVASCRIPT = r"""
 (() => {
+  const startNavigationProgress = () => {
+    document.documentElement.classList.add("is-navigating");
+    document.body.setAttribute("aria-busy", "true");
+  };
+  const stopNavigationProgress = () => {
+    document.documentElement.classList.remove("is-navigating");
+    document.body.removeAttribute("aria-busy");
+  };
+
+  window.addEventListener("pageshow", stopNavigationProgress);
+  window.addEventListener("beforeunload", startNavigationProgress);
+  document.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const link = target.closest("a[href]");
+    if (!link || link.hasAttribute("download") || (link.target && link.target !== "_self")) return;
+    const destination = new URL(link.href, window.location.href);
+    if (destination.origin !== window.location.origin) return;
+    if (
+      destination.pathname === window.location.pathname &&
+      destination.search === window.location.search &&
+      destination.hash === window.location.hash
+    ) return;
+    if (
+      destination.pathname === window.location.pathname &&
+      destination.search === window.location.search &&
+      destination.hash
+    ) return;
+    startNavigationProgress();
+  });
   const toggle = document.getElementById("mobile-menu-toggle");
   const dialog = document.getElementById("mobile-navigation");
   const closeButton = document.getElementById("close-mobile-navigation");
@@ -361,6 +420,7 @@ JAVASCRIPT = r"""
         if (text) params.set(key, text);
       }
       const query = params.toString();
+      startNavigationProgress();
       window.location.assign(`${window.location.pathname}${query ? `?${query}` : ""}`);
     });
   });

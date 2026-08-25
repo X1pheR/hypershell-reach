@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from hats_mcp.runs import RunStore
+from hypershell_reach.runs import RunStore
 
 
 class Clock:
@@ -209,3 +209,169 @@ def test_list_runs_filters_and_orders(tmp_path) -> None:
     assert [record.id for record in store.list()] == [second.id, first.id]
     assert [record.id for record in store.list(task_id="task-example")] == [first.id]
     assert [record.id for record in store.list(status="succeeded", limit=1)] == [second.id]
+
+
+def test_async_run_survives_sync_only_reconciliation(tmp_path) -> None:
+    first = RunStore(tmp_path, reconcile_modes={"sync"})
+    record = first.create(
+        operation="run_shell",
+        target="example",
+        timeout_seconds=300,
+        may_mutate=False,
+        execution_mode="async",
+    )
+
+    second = RunStore(tmp_path, reconcile_modes={"sync"})
+    recovered = second.get(record.id)
+
+    assert recovered.execution_mode == "async"
+    assert recovered.status == "running"
+
+
+def test_async_run_is_interrupted_when_executor_reconciles(tmp_path) -> None:
+    first = RunStore(tmp_path, reconcile_modes={"sync"})
+    record = first.create(
+        operation="run_shell",
+        target="example",
+        timeout_seconds=300,
+        may_mutate=True,
+        execution_mode="async",
+    )
+
+    executor_restart = RunStore(tmp_path, reconcile_modes={"sync", "async"})
+    recovered = executor_restart.get(record.id)
+
+    assert recovered.status == "interrupted"
+    assert recovered.error_type == "ExecutorRestart"
+    assert recovered.ambiguous is True
+
+
+def test_run_mutations_serialize_across_store_instances(tmp_path, monkeypatch) -> None:
+    import threading
+    import time
+
+    executor_store = RunStore(tmp_path, reconcile_modes=set())
+    mcp_store = RunStore(tmp_path, reconcile_modes=set())
+    record = executor_store.create(
+        operation="run_command",
+        target="example",
+        timeout_seconds=300,
+        may_mutate=False,
+        execution_mode="async",
+    )
+
+    entered_finish_write = threading.Event()
+    release_finish_write = threading.Event()
+    original_atomic_write = executor_store._atomic_write
+
+    def delayed_atomic_write(updated):
+        if updated.id == record.id and updated.status == "succeeded":
+            entered_finish_write.set()
+            assert release_finish_write.wait(timeout=2)
+        original_atomic_write(updated)
+
+    monkeypatch.setattr(executor_store, "_atomic_write", delayed_atomic_write)
+    errors: list[BaseException] = []
+
+    def finish_run() -> None:
+        try:
+            executor_store.finish(record.id, _execution())
+        except BaseException as exc:
+            errors.append(exc)
+
+    def retain_run() -> None:
+        try:
+            mcp_store.set_retained(record.id, True)
+        except BaseException as exc:
+            errors.append(exc)
+
+    finish_thread = threading.Thread(target=finish_run)
+    finish_thread.start()
+    assert entered_finish_write.wait(timeout=2)
+
+    retain_thread = threading.Thread(target=retain_run)
+    retain_thread.start()
+    time.sleep(0.05)
+    release_finish_write.set()
+    finish_thread.join(timeout=2)
+    retain_thread.join(timeout=2)
+
+    assert errors == []
+    assert executor_store.get(record.id).status == "succeeded"
+    assert executor_store.get(record.id).retained is True
+
+
+def test_run_mutations_use_one_bounded_coordination_lock(tmp_path) -> None:
+    store = RunStore(tmp_path, reconcile_modes=set())
+    records = [
+        store.create(
+            operation="run_command",
+            target="example",
+            timeout_seconds=30,
+            may_mutate=False,
+        )
+        for _ in range(3)
+    ]
+    for record in records:
+        store.finish(record.id, _execution())
+
+    assert (tmp_path / ".write.lock").is_file()
+    assert not (tmp_path / ".locks").exists()
+
+
+def test_list_runs_stops_reading_after_unfiltered_limit(tmp_path, monkeypatch) -> None:
+    store = RunStore(tmp_path / "runs")
+    for index in range(12):
+        record = store.create(
+            operation="run_command",
+            target="docker",
+            timeout_seconds=30,
+            may_mutate=False,
+            purpose=f"run {index}",
+        )
+        store.finish(
+            record.id,
+            {
+                "status": "succeeded",
+                "exit_code": 0,
+                "timed_out": False,
+                "duration_ms": 1,
+                "stdout": {"bytes": 0, "truncated": False},
+                "stderr": {"bytes": 0, "truncated": False},
+            },
+        )
+
+    read_count = 0
+    original = store._read_path
+
+    def counted(path):
+        nonlocal read_count
+        read_count += 1
+        return original(path)
+
+    monkeypatch.setattr(store, "_read_path", counted)
+    records = store.list(limit=3)
+
+    assert len(records) == 3
+    assert read_count == 3
+    assert [record.id for record in records] == sorted(
+        [record.id for record in records], reverse=True
+    )
+
+
+def test_run_store_count_does_not_parse_records(tmp_path, monkeypatch) -> None:
+    store = RunStore(tmp_path / "runs")
+    for _ in range(4):
+        store.create(
+            operation="run_command",
+            target="docker",
+            timeout_seconds=30,
+            may_mutate=False,
+        )
+
+    monkeypatch.setattr(
+        store,
+        "_read_path",
+        lambda _path: (_ for _ in ()).throw(AssertionError("count must not parse records")),
+    )
+    assert store.count() == 4

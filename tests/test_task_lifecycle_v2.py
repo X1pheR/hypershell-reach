@@ -3,7 +3,7 @@ from __future__ import annotations
 import yaml
 import pytest
 
-from hats_mcp.tasks import TaskStore
+from hypershell_reach.tasks import TaskStore
 
 
 def _legacy_v1_payload(task_id: str) -> dict[str, object]:
@@ -112,7 +112,7 @@ def test_new_tasks_do_not_create_evidence_directories(tmp_path) -> None:
 def test_task_atomic_write_fsyncs_file_and_parent_directory(tmp_path, monkeypatch) -> None:
     import os
     import stat
-    import hats_mcp.tasks as tasks_module
+    import hypershell_reach.tasks as tasks_module
 
     fsynced_modes: list[int] = []
     real_fsync = os.fsync
@@ -131,7 +131,7 @@ def test_task_atomic_write_fsyncs_file_and_parent_directory(tmp_path, monkeypatc
 
 
 def test_task_atomic_replace_failure_preserves_committed_record(tmp_path, monkeypatch) -> None:
-    import hats_mcp.tasks as tasks_module
+    import hypershell_reach.tasks as tasks_module
 
     store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
     original = store.create(title="Original", objective="Remain committed.")
@@ -223,7 +223,7 @@ def test_close_retry_after_committed_archive_is_idempotent_for_caller(tmp_path) 
 
 def test_close_fsyncs_task_and_both_root_directories(tmp_path, monkeypatch) -> None:
     import os
-    import hats_mcp.tasks as tasks_module
+    import hypershell_reach.tasks as tasks_module
 
     tasks = tmp_path / "tasks"
     archive = tmp_path / "archive"

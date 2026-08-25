@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from hats_mcp.server import list_tools
+from hypershell_reach.server import list_tools
 
 
 def test_tools_have_truthful_annotations() -> None:
@@ -35,8 +35,12 @@ def test_tools_have_truthful_annotations() -> None:
         "close_task": (False, False, True, False),
         "archive_task": (False, False, True, False),
         "run_script": (False, True, False, True),
+        "start_script": (False, True, False, True),
         "run_command": (False, True, False, True),
+        "start_command": (False, True, False, True),
         "run_shell": (False, True, False, True),
+        "start_shell": (False, True, False, True),
+        "cancel_run": (False, True, True, True),
     }
 
     assert set(tools) == set(expected)
@@ -61,7 +65,7 @@ def test_candidate_approval_tool_does_not_confuse_state_mechanics_with_authoriza
 def test_execution_tools_require_bounded_purpose_with_safe_contract_guidance() -> None:
     tools = {tool.name: tool for tool in asyncio.run(list_tools())}
 
-    for name in ("run_command", "run_shell", "run_script"):
+    for name in ("run_command", "run_shell", "run_script", "start_command", "start_shell", "start_script"):
         tool = tools[name]
         schema = tool.inputSchema
         purpose = schema["properties"]["purpose"]
@@ -74,3 +78,17 @@ def test_execution_tools_require_bounded_purpose_with_safe_contract_guidance() -
 
     assert "historical records may return" in tools["list_runs"].description.lower()
     assert "historical records may" in tools["get_run"].description.lower()
+
+
+def test_async_execution_tools_publish_durable_polling_semantics() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(list_tools())}
+
+    for name in ("start_command", "start_shell", "start_script"):
+        description = tools[name].description.lower()
+        assert "durable" in description
+        assert "get_run" in description
+        assert "list_runs" in description
+
+    cancel_schema = tools["cancel_run"].inputSchema
+    assert cancel_schema["properties"]["confirm"]["default"] is False
+    assert "confirm=true" in tools["cancel_run"].description.lower()
