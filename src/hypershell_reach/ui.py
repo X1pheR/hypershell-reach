@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html import escape
 from typing import Any
 from urllib.parse import urlencode
 
-import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .config import HATSConfig, load_config
-from .read_model import HATSReadModel
-from .ui_assets import CSS, HATS_MARK_SVG, JAVASCRIPT
+from .config import ReachConfig, load_config
+from .read_model import ReachReadModel
+from .ui_assets import CSS, REACH_MARK_SVG, JAVASCRIPT
 from .ui_docs import USER_GUIDE, DocumentationPage, TocItem, documentation_groups, render_document, technical_page
 
 _NAV = (
@@ -56,9 +54,9 @@ class _Link:
 
 def _brand() -> str:
     return """
-<a class="brand" href="/" aria-label="Open HATS overview">
-  <img class="brand-mark" src="/assets/hats-mark.svg" alt="" width="44" height="44">
-  <span class="brand-copy"><strong>Hypershell</strong><small>HATS</small></span>
+<a class="brand" href="/" aria-label="Open Hypershell Reach overview">
+  <img class="brand-mark" src="/assets/reach-mark.svg" alt="" width="44" height="44">
+  <span class="brand-copy"><strong>Hypershell</strong><small>Hypershell Reach</small></span>
 </a>
 """
 
@@ -101,8 +99,8 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#050816">
-  <title>{escape(title)} · HATS</title>
-  <link rel="icon" href="/assets/hats-mark.svg" type="image/svg+xml">
+  <title>{escape(title)} · Hypershell Reach</title>
+  <link rel="icon" href="/assets/reach-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
@@ -120,6 +118,7 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
       <span class="availability-badge" aria-label="Runtime availability: Available">Runtime available</span>
       <span class="mode-badge" aria-label="Mode: Read-only">Read-only</span>
     </div>
+    <span class="navigation-progress" aria-hidden="true"></span>
   </header>
   <main id="main-content" tabindex="-1">
     <div class="page-heading-row"><div><h1>{escape(title)}</h1><p class="page-summary">{escape(intro)}</p></div>{_context_help(active)}</div>
@@ -131,7 +130,7 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
         <div>{_brand()}</div>
         <button id="close-mobile-navigation" class="icon-button" type="button" aria-label="Close navigation"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
-      <span id="mobile-navigation-title" class="sr-only">HATS navigation</span>
+      <span id="mobile-navigation-title" class="sr-only">Hypershell Reach navigation</span>
       <nav class="mobile-primary-navigation" aria-label="Mobile primary navigation">{_nav_links(active)}</nav>
       <div class="mobile-utility-navigation">
         <a class="mobile-utility-link" href="/help"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.7 9a2.6 2.6 0 1 1 4.45 1.84c-.9.86-2.15 1.27-2.15 2.66"/><path d="M12 17h.01"/></svg><span>Help</span></a>
@@ -442,8 +441,8 @@ def _documentation_layout(page: DocumentationPage) -> str:
     )
 
 
-def create_app(config: HATSConfig) -> Starlette:
-    model = HATSReadModel(config)
+def create_app(config: ReachConfig) -> Starlette:
+    model = ReachReadModel(config)
 
     def home(_: Request) -> Response:
         try:
@@ -453,7 +452,7 @@ def create_app(config: HATSConfig) -> Starlette:
                 "Targets",
                 "/targets",
                 f"{enabled_targets}/{len(target_rows)} enabled",
-                "Systems HATS can connect to and what they support.",
+                "Systems Hypershell Reach can connect to and what they support.",
             )
         except (OSError, RuntimeError, ValueError):
             targets_card = _overview_card(
@@ -497,7 +496,7 @@ def create_app(config: HATSConfig) -> Starlette:
                 "Runs",
                 "/runs",
                 _count_label(len(run_rows), "recent run"),
-                "Recent HATS activity and outcomes.",
+                "Recent Hypershell Reach activity and outcomes.",
                 detail=" · ".join(run_detail_parts) or "No failures in the visible history",
                 state="warning" if running_runs or failed_runs else "neutral",
             )
@@ -540,7 +539,7 @@ def create_app(config: HATSConfig) -> Starlette:
                     "Skills",
                     "/skills",
                     _count_label(skill_count, "skill"),
-                    "Shared Agent Skills HATS can read.",
+                    "Shared Agent Skills Hypershell Reach can read.",
                     detail=_count_label(len(skill_reports), "configured source"),
                 )
         except (OSError, RuntimeError, ValueError):
@@ -552,12 +551,12 @@ def create_app(config: HATSConfig) -> Starlette:
             "Help",
             "/help",
             "User guide + technical reference",
-            "How to use, configure and maintain HATS.",
+            "How to use, configure and maintain Hypershell Reach.",
         )
         cards = "".join((targets_card, tooling_card, runs_card, tasks_card, skills_card, help_card))
         return _page(
             "Overview",
-            "See what HATS can access, what ran recently and where to find details.",
+            "See what Hypershell Reach can access, what ran recently and where to find details.",
             f'<div class="overview-grid">{cards}</div>',
             active="/",
         )
@@ -577,8 +576,8 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         return _page(
             "Targets",
-            "Systems HATS can connect to and what they support. Connection details and credentials stay hidden.",
-            _panel("Configured targets", "Configured systems available to HATS.", content),
+            "Systems Hypershell Reach can connect to and what they support. Connection details and credentials stay hidden.",
+            _panel("Configured targets", "Configured systems available to Hypershell Reach.", content),
             active="/targets",
         )
 
@@ -644,7 +643,7 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         content = '<div class="section-stack">' + _panel(
             "Managed tools",
-            "Reviewed tools HATS can run. Source code and deployment paths stay hidden.",
+            "Reviewed tools Hypershell Reach can run. Source code and deployment paths stay hidden.",
             managed,
         ) + _panel(
             "Tooling candidates",
@@ -689,8 +688,8 @@ def create_app(config: HATSConfig) -> Starlette:
         )
         return _page(
             "Runs",
-            "Recent HATS activity. Command text, arguments and output are not stored here.",
-            _panel("Recent activity", "The latest HATS run records.", content),
+            "Recent Hypershell Reach activity. Command text, arguments and output are not stored here.",
+            _panel("Recent activity", "The latest Hypershell Reach run records.", content),
             active="/runs",
         )
 
@@ -715,7 +714,7 @@ def create_app(config: HATSConfig) -> Starlette:
         return _page(
             "Tasks",
             "Work continuity records that may span sessions. Detailed private context stays hidden.",
-            _panel("Task records", "Current HATS task summaries.", content),
+            _panel("Task records", "Current Hypershell Reach task summaries.", content),
             active="/tasks",
         )
 
@@ -1018,8 +1017,8 @@ def create_app(config: HATSConfig) -> Starlette:
                 )
             if content_only:
                 notices.append(
-                    '<div class="notice">This page shows the skill content HATS can read. '
-                    'Use the HATS skill catalog when current agent activation matters.</div>'
+                    '<div class="notice">This page shows the skill content Hypershell Reach can read. '
+                    'Use the Hypershell Reach skill catalog when current agent activation matters.</div>'
                 )
             table = ""
             if rows or not unavailable:
@@ -1043,7 +1042,7 @@ def create_app(config: HATSConfig) -> Starlette:
         return _page(
             "Skills",
             "Agent Skills available from configured sources.",
-            _panel("Available skills", "Skills HATS can read from configured sources.", content),
+            _panel("Available skills", "Skills Hypershell Reach can read from configured sources.", content),
             active="/skills",
         )
 
@@ -1054,7 +1053,7 @@ def create_app(config: HATSConfig) -> Starlette:
             content = '<div class="notice error" role="alert">Help is temporarily unavailable.</div>'
         return _page(
             "Help",
-            "Learn what HATS shows, how to use each view and what the Web UI deliberately keeps hidden.",
+            "Learn what Hypershell Reach shows, how to use each view and what the Web UI deliberately keeps hidden.",
             content,
         )
 
@@ -1084,14 +1083,60 @@ def create_app(config: HATSConfig) -> Starlette:
         return PlainTextResponse(JAVASCRIPT, media_type="text/javascript", headers=_ASSET_HEADERS)
 
     def product_mark(_: Request) -> Response:
-        return Response(HATS_MARK_SVG, media_type="image/svg+xml", headers=_ASSET_HEADERS)
+        return Response(REACH_MARK_SVG, media_type="image/svg+xml", headers=_ASSET_HEADERS)
+
+    def api_summary(_: Request) -> Response:
+        skill_reports = model.skill_source_summaries()
+        counts = {
+            "skills": sum(int(report.get("count") or 0) for report in skill_reports if report.get("available")),
+            "tools": len(model.tooling()),
+            "tasks": len(model.task_summaries(limit=500)),
+            "runs": model.run_count(),
+        }
+        return JSONResponse(
+            {"product": "Hypershell Reach", "status": "ok", "counts": counts},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    def api_skills(_: Request) -> Response:
+        skills, _reports = model.skills()
+        fields = ("id", "name", "description", "category", "source", "source_type")
+        items = [{key: item.get(key) for key in fields if key in item} for item in skills]
+        return JSONResponse({"count": len(items), "items": items}, headers={"Cache-Control": "no-store"})
+
+    def api_tools(_: Request) -> Response:
+        items = model.tooling()
+        return JSONResponse({"count": len(items), "items": items}, headers={"Cache-Control": "no-store"})
+
+    def api_tasks(_: Request) -> Response:
+        items = model.task_summaries(limit=500)
+        return JSONResponse({"count": len(items), "items": items}, headers={"Cache-Control": "no-store"})
+
+    def api_runs(request: Request) -> Response:
+        raw_limit = request.query_params.get("limit", "100")
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            return JSONResponse({"error": "invalid limit"}, status_code=400)
+        if not 1 <= limit <= 500:
+            return JSONResponse({"error": "limit must be between 1 and 500"}, status_code=400)
+        items = model.run_summaries(limit=limit)
+        return JSONResponse(
+            {"count": len(items), "total": model.run_count(), "items": items},
+            headers={"Cache-Control": "no-store"},
+        )
 
     def health(_: Request) -> Response:
-        return JSONResponse({"status": "ok", "role": "hats-ui"}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"status": "ok", "role": "reach"}, headers={"Cache-Control": "no-store"})
 
     return Starlette(
         routes=[
             Route("/", home, methods=["GET"]),
+            Route("/api/v1/summary", api_summary, methods=["GET"]),
+            Route("/api/v1/skills", api_skills, methods=["GET"]),
+            Route("/api/v1/tools", api_tools, methods=["GET"]),
+            Route("/api/v1/tasks", api_tasks, methods=["GET"]),
+            Route("/api/v1/runs", api_runs, methods=["GET"]),
             Route("/targets", targets, methods=["GET"]),
             Route("/tooling", tooling, methods=["GET"]),
             Route("/tooling/{tool_id}", tool_detail, methods=["GET"]),
@@ -1108,23 +1153,7 @@ def create_app(config: HATSConfig) -> Starlette:
             Route("/candidates", candidates_compatibility, methods=["GET"]),
             Route("/assets/app.css", stylesheet, methods=["GET"]),
             Route("/assets/app.js", javascript, methods=["GET"]),
-            Route("/assets/hats-mark.svg", product_mark, methods=["GET"]),
+            Route("/assets/reach-mark.svg", product_mark, methods=["GET"]),
             Route("/healthz", health, methods=["GET"]),
         ]
     )
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="hats-ui", description="Read-only HATS Web UI")
-    parser.add_argument("--config", help="Configuration file. Defaults to HATS_CONFIG.")
-    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind address. Default: 127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080, help="HTTP port. Default: 8080")
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    args = _parser().parse_args(argv)
-    if not 1 <= args.port <= 65535:
-        raise SystemExit("--port must be between 1 and 65535")
-    app = create_app(load_config(args.config))
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)

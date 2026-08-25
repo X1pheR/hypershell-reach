@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from hats_mcp.runs import RunStore
-from hats_mcp.task_migration import copy_and_validate_task_storage, inspect_task_storage
-from hats_mcp.tasks import TaskStore
+from hypershell_reach.runs import RunStore
+from hypershell_reach.task_migration import copy_and_validate_task_storage, inspect_task_storage
+from hypershell_reach.tasks import TaskStore
 
 
 def _write_v1_task(root: Path, task_id: str, *, status: str = "active", retained: bool = False) -> Path:

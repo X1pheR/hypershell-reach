@@ -4,15 +4,15 @@ import json
 
 import pytest
 
-from hats_mcp import server
-from hats_mcp.config import HATSConfig
+from hypershell_reach import server
+from hypershell_reach.config import ReachConfig
 
 
-def _config(tmp_path, registry_path=None) -> HATSConfig:
+def _config(tmp_path, registry_path=None) -> ReachConfig:
     sources = {}
     if registry_path is not None:
         sources["tooling_registry"] = {"type": "markdown", "path": str(registry_path)}
-    return HATSConfig.model_validate(
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {

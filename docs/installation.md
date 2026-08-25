@@ -1,70 +1,68 @@
 # Installation
 
-HATS releases publish a Python wheel, source distribution and SHA-256 manifest through GitHub Releases. HATS is not published to a language package registry.
+Hypershell Reach releases publish a Python wheel, source distribution and SHA-256 manifest through GitHub Releases.
 
 ## Requirements
 
 - Python 3.12 or newer;
-- `uv` for source development or environment management;
-- OpenSSH client when SSH targets are configured;
+- OpenSSH client for configured SSH targets;
 - deployment-owned SSH identities and known-host files;
-- one HATS YAML configuration file.
+- one Reach YAML configuration file.
 
-## Install an immutable release
+## Install a release
 
-Download the wheel and `SHA256SUMS` from the selected GitHub release, verify the wheel against the manifest, and install that exact artifact into the deployment environment.
-
-Example after the release assets have been obtained locally:
+Verify the selected release assets and install the exact wheel:
 
 ```bash
 sha256sum --check SHA256SUMS --ignore-missing
-uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
+uv tool install ./hypershell_reach-X.Y.Z-py3-none-any.whl
 ```
 
-The base install provides the STDIO command:
+The installed product has one public command:
 
 ```bash
-hats-mcp
+reach
 ```
 
-The same wheel also installs the optional durable executor and Web UI runtimes:
+Validate deployment prerequisites:
 
 ```bash
-HATS_CONFIG=/path/to/hats.yaml hats-executor
+REACH_CONFIG=/path/to/reach.yaml reach validate
 ```
 
-`hats-executor` must be supervised independently of an MCP STDIO child when `executor.socket_path` is configured. It requires the same deployment configuration, Run workspace and SSH credential mounts as `hats-mcp`, plus access to the configured private Unix-socket path.
-
+Start the complete service:
 
 ```bash
-uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
-hats-ui --host 127.0.0.1 --port 8080
+REACH_CONFIG=/path/to/reach.yaml reach --host 0.0.0.0 --port 8080
 ```
 
-Validate configuration and local prerequisites before connecting an MCP client:
+The service provides MCP, the read-only API, Web UI and asynchronous execution manager on one lifecycle.
+
+## Container deployment
+
+The repository Dockerfile builds the same product and exposes port `8080`. Mount the Reach configuration, persistent workspace, configured tool/skill sources and SSH credentials according to deployment policy. Do not bake deployment secrets into the image.
+
+## Development
+
+A reviewed checkout can run with the frozen lockfile:
 
 ```bash
-HATS_CONFIG=/path/to/hats.yaml hats-mcp validate
+uv sync --frozen --extra dev
+REACH_CONFIG=/path/to/reach.yaml uv run --frozen reach
 ```
 
-## Development from a reviewed checkout
-
-A development environment may run directly from an exact clean checkout:
-
-```bash
-uv run --frozen --directory /path/to/hats-source hats-mcp
-```
-
-This is a development and transition model. Maintained deployment should prefer a verified release artifact so runtime does not depend on mutable Git checkout state.
+Maintained deployment should use a verified release artifact rather than a mutable source checkout.
 
 ## Upgrade
 
-1. Review the new release notes and checksum manifest.
-2. Install the selected exact wheel into the deployment environment.
-3. Keep deployment configuration separate from the generic product source.
-4. Run `hats-mcp validate`.
-5. When durable execution is configured, start or refresh the separately supervised `hats-executor` before the HATS MCP child and verify its private socket is available.
-6. Start or refresh the HATS MCP child.
-7. Re-run consumer acceptance for target execution, managed tools, tooling candidates and configured skill adapters that changed.
+1. Review release notes and checksums.
+2. Back up or snapshot deployment configuration and persistent Reach state according to deployment policy.
+3. Install or pull the exact new Reach release.
+4. Run `reach validate` against the deployment configuration.
+5. Start the new Reach service.
+6. Validate `/healthz`, `/api/v1/summary`, MCP discovery and one representative short execution.
+7. Validate asynchronous execution when the release changes execution lifecycle code.
 
-Persistent Runs and Tasks live in configured workspace paths and are independent of the Python package installation. Do not remove those paths as part of a normal package upgrade.
+Runs, Tasks and Candidates live in configured workspace paths and are independent of package installation.
+
+A rollback across a Run schema change requires a compatible reader or an explicit data downgrade/quarantine step. Do not assume an older image can read newer Run records.

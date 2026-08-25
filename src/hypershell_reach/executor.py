@@ -4,14 +4,13 @@ import asyncio
 import fcntl
 import json
 import os
-import signal
 import stat
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .config import HATSConfig, load_config
+from .config import ReachConfig, load_config
 from .execution import run_ssh
 from .runs import RunOperation, RunStore
 
@@ -54,11 +53,12 @@ class ExecutorRequest(BaseModel):
 
 
 class ExecutorService:
-    def __init__(self, config: HATSConfig) -> None:
-        if config.executor.socket_path is None:
-            raise RuntimeError("HATS async executor is not configured")
+    def __init__(self, config: ReachConfig, *, serve_socket: bool = True) -> None:
+        if serve_socket and config.executor.socket_path is None:
+            raise RuntimeError("Hypershell Reach async executor is not configured")
         self.config = config
-        self.socket_path = Path(config.executor.socket_path)
+        self.serve_socket = serve_socket
+        self.socket_path = Path(config.executor.socket_path) if config.executor.socket_path is not None else None
         self._server: asyncio.AbstractServer | None = None
         self._store: RunStore | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -73,8 +73,16 @@ class ExecutorService:
         return self._store
 
     async def start(self) -> None:
-        if self._server is not None:
+        if self._store is not None:
             return
+        if not self.serve_socket:
+            self._store = RunStore(
+                self.config.workspace.runs,
+                completed_days=self.config.retention.runs.completed_days,
+                reconcile_modes={"async"},
+            )
+            return
+        assert self.socket_path is not None
         self.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
         lock_path = Path(f"{self.socket_path}.lock")
         self._lock_handle = lock_path.open("a+", encoding="utf-8")
@@ -83,7 +91,7 @@ class ExecutorService:
         except BlockingIOError as exc:
             self._lock_handle.close()
             self._lock_handle = None
-            raise RuntimeError("another HATS executor already owns the configured socket") from exc
+            raise RuntimeError("another Hypershell Reach executor already owns the configured socket") from exc
 
         try:
             try:
@@ -131,10 +139,12 @@ class ExecutorService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        try:
-            self.socket_path.unlink()
-        except FileNotFoundError:
-            pass
+        if self.serve_socket and self.socket_path is not None:
+            try:
+                self.socket_path.unlink()
+            except FileNotFoundError:
+                pass
+        self._store = None
 
         if self._lock_handle is not None:
             try:
@@ -177,6 +187,12 @@ class ExecutorService:
             writer.close()
             await writer.wait_closed()
 
+    def submit(self, submission: ExecutionSubmission) -> dict[str, object]:
+        return self._submit(submission)
+
+    async def cancel(self, run_id: str) -> dict[str, object]:
+        return await self._cancel(run_id)
+
     def _submit(self, submission: ExecutionSubmission) -> dict[str, object]:
         target = self.config.enabled_target(submission.target)
         max_timeout = self.config.resolved_max_timeout(target)
@@ -199,7 +215,7 @@ class ExecutorService:
             script_sha256=submission.script_sha256,
             argument_names=submission.argument_names,
         )
-        task = asyncio.create_task(self._execute(record.id, submission), name=f"hats-executor:{record.id}")
+        task = asyncio.create_task(self._execute(record.id, submission), name=f"reach-async:{record.id}")
         self._tasks[record.id] = task
         task.add_done_callback(lambda _task, run_id=record.id: self._tasks.pop(run_id, None))
         return {
@@ -255,17 +271,17 @@ class ExecutorService:
                 self.store.finish(run_id, execution)
 
 
-async def submit_execution(config: HATSConfig, submission: ExecutionSubmission) -> dict[str, object]:
+async def submit_execution(config: ReachConfig, submission: ExecutionSubmission) -> dict[str, object]:
     socket_path = config.executor.socket_path
     if socket_path is None:
-        raise RuntimeError("HATS async executor is not configured")
+        raise RuntimeError("Hypershell Reach async executor is not configured")
     timeout = config.executor.submission_timeout_seconds
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_unix_connection(socket_path), timeout=timeout
         )
     except (OSError, TimeoutError) as exc:
-        raise RuntimeError("HATS async executor is unavailable") from exc
+        raise RuntimeError("Hypershell Reach async executor is unavailable") from exc
 
     request = ExecutorRequest(action="submit", submission=submission)
     writer.write(request.model_dump_json().encode("utf-8") + b"\n")
@@ -277,14 +293,14 @@ async def submit_execution(config: HATSConfig, submission: ExecutionSubmission) 
         await writer.wait_closed()
 
     if not raw or len(raw) > _MAX_MESSAGE_BYTES:
-        raise RuntimeError("HATS async executor returned an invalid response")
+        raise RuntimeError("Hypershell Reach async executor returned an invalid response")
     try:
         response = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("HATS async executor returned an invalid response") from exc
+        raise RuntimeError("Hypershell Reach async executor returned an invalid response") from exc
     if response.get("ok") is not True:
         error_type = str(response.get("error") or "ExecutorError")[:100]
-        raise RuntimeError(f"HATS async executor rejected the submission ({error_type})")
+        raise RuntimeError(f"Hypershell Reach async executor rejected the submission ({error_type})")
     return {
         "run_id": response["run_id"],
         "status": response["status"],
@@ -292,17 +308,17 @@ async def submit_execution(config: HATSConfig, submission: ExecutionSubmission) 
     }
 
 
-async def cancel_execution(config: HATSConfig, run_id: str) -> dict[str, object]:
+async def cancel_execution(config: ReachConfig, run_id: str) -> dict[str, object]:
     socket_path = config.executor.socket_path
     if socket_path is None:
-        raise RuntimeError("HATS async executor is not configured")
+        raise RuntimeError("Hypershell Reach async executor is not configured")
     timeout = config.executor.submission_timeout_seconds
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_unix_connection(socket_path), timeout=timeout
         )
     except (OSError, TimeoutError) as exc:
-        raise RuntimeError("HATS async executor is unavailable") from exc
+        raise RuntimeError("Hypershell Reach async executor is unavailable") from exc
 
     request = ExecutorRequest(action="cancel", run_id=run_id)
     writer.write(request.model_dump_json().encode("utf-8") + b"\n")
@@ -314,38 +330,16 @@ async def cancel_execution(config: HATSConfig, run_id: str) -> dict[str, object]
         await writer.wait_closed()
 
     if not raw or len(raw) > _MAX_MESSAGE_BYTES:
-        raise RuntimeError("HATS async executor returned an invalid response")
+        raise RuntimeError("Hypershell Reach async executor returned an invalid response")
     try:
         response = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("HATS async executor returned an invalid response") from exc
+        raise RuntimeError("Hypershell Reach async executor returned an invalid response") from exc
     if response.get("ok") is not True:
         error_type = str(response.get("error") or "ExecutorError")[:100]
-        raise RuntimeError(f"HATS async executor rejected cancellation ({error_type})")
+        raise RuntimeError(f"Hypershell Reach async executor rejected cancellation ({error_type})")
     return {
         "run_id": response["run_id"],
         "status": response["status"],
         "cancelled": bool(response["cancelled"]),
     }
-
-
-async def _serve() -> None:
-    config = load_config()
-    service = ExecutorService(config)
-    await service.start()
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-    try:
-        await stop_event.wait()
-    finally:
-        await service.stop()
-
-
-def main() -> None:
-    asyncio.run(_serve())
-
-
-if __name__ == "__main__":
-    main()

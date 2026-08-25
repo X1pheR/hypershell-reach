@@ -1,116 +1,67 @@
 # Architecture
 
-HATS is a modular MCP service for reusable homelab agent capabilities. It keeps deployment configuration outside the repository and adds modules only when they solve a concrete use case.
+Hypershell Reach is the capability layer between agents and their environment. It is a modular monolith with one long-lived deployment process.
 
-## Overview
+## Runtime
 
 ```mermaid
 flowchart LR
-    Client[MCP client] --> Server[HATS MCP server]
-    Config[YAML configuration] --> Server
-    Config --> Executor[HATS executor]
-    Server --> Targets[Target registry]
-    Server --> Tools[Managed tool registry]
-    Server -->|private Unix socket| Executor
-    Targets --> SSH[SSH execution]
-    Tools --> SSH
-    Executor --> SSH
-    Server --> Runs[Run state]
-    Executor --> Runs
-    Server --> Tasks[Task state]
-    Server --> Skills[Skill sources]
-    Server --> Registry[Optional tooling registry]
+    C[MCP client] -->|Streamable HTTP| M
+    H[Homepage] -->|Read-only HTTP| A
+    B[Browser] --> U
+
+    subgraph R[Hypershell Reach service]
+        M[MCP interface]
+        A[Read-only API]
+        U[Web UI]
+        X[Execution manager]
+        RM[Read model]
+        M --> X
+        M --> RM
+        A --> RM
+        U --> RM
+    end
+
+    X --> SSH[Configured SSH targets]
+    RM --> W[(Filesystem-backed state and sources)]
+    X --> W
 ```
 
-HATS remains a small product with filesystem-backed state and no external queue or database. The MCP runtime owns discovery, synchronous calls and client-facing state operations. When durable asynchronous execution is configured, one separately supervised `hats-executor` process owns accepted async SSH work through a private Unix socket. This separation is required so accepted work can outlive an MCP STDIO child or gateway request without introducing a general-purpose orchestration platform.
+MCP, API, UI and asynchronous execution share one package, configuration and lifecycle. They are modules, not independent services. Reach requires no external queue, worker service or database.
+
+## Request and execution lifetimes
+
+Synchronous `run_*` operations are bounded by `max_synchronous_timeout_seconds`. Longer work uses `start_*` and returns a Run ID quickly.
+
+The execution manager creates an independent asyncio Task in the long-lived Reach process. Once accepted, that work is not owned by the MCP request, client session, MCPJungle request or OpenAI tunnel command. Request cancellation therefore does not cancel an accepted Run.
+
+A Reach process restart is a different boundary. Raw command/script content is intentionally not persisted, so interrupted asynchronous work is not replayed automatically. On startup, stale asynchronous Runs are reconciled as interrupted instead of being guessed or duplicated.
 
 ## Modules
 
 | Module | Responsibility |
 | --- | --- |
-| Configuration | Validate deployment-specific targets, source roots and workspace paths. |
-| Targets | Return safe target metadata and resolve one configured execution target. |
-| SSH execution | Run bounded non-interactive commands or interpreter input on configured targets. |
-| Durable executor | Own accepted asynchronous Runs independently of MCP request lifetime with bounded local submission and concurrency. |
-| Managed tools | Discover approved metadata and execute only registered script IDs. |
-| Runs | Record agent purpose, bounded technical result context and ambiguous/interrupted execution outcomes without persisting raw execution content. |
-| Tasks | Keep durable continuity only for work that needs recovery or handoff. |
-| Skills | Discover and retrieve read-only Agent Skills from configured sources. |
-| Candidates | Validate and durably mutate typed Candidate YAML state with revision CAS and per-Candidate locking when Candidate storage is configured. |
-| Tooling registry | Preserve the optional deployment-owned Markdown registry as a read-only compatibility feed and import-preview source. |
+| Configuration | Validate deployment-owned targets, source roots, limits and workspace paths. |
+| MCP | Expose governed capability contracts over Streamable HTTP. |
+| Execution manager | Own accepted asynchronous work and bounded concurrency. |
+| SSH execution | Run non-interactive work with strict host keys, key-only auth, no PTY/forwarding, bounded timeout/output and no automatic retry. |
+| Managed tools | Resolve reviewed script IDs, metadata, arguments and target capabilities. |
+| Runs | Persist safe execution metadata without raw command/script/output content. |
+| Tasks | Persist bounded cross-session work continuity. |
+| Skills | Discover read-only Agent Skills from configured sources. |
+| Candidates | Govern reusable tooling proposals and promotion state. |
+| Read model | Sanitize and cache read-only product views for UI/API consumers. |
+| Web UI | Present operational state without adding browser mutation capability. |
+| Read-only API | Expose bounded inventories and summary counts for trusted internal consumers. |
 
-## Managed tool execution
+## State boundary
 
-```mermaid
-sequenceDiagram
-    participant C as MCP client
-    participant H as HATS
-    participant S as Tool source
-    participant T as Target
-    C->>H: run_script(script_id, target, purpose, arguments)
-    H->>S: Resolve exact registered ID
-    H->>H: Validate metadata, arguments, capabilities
-    H->>T: Send script over bounded SSH stdin
-    T-->>H: Exit status and bounded output
-    H-->>C: Structured result
-```
+Runs, Tasks and Candidates remain filesystem-backed. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
 
-Tool source delivery is external to HATS. A target does not need the source repository or script installed locally.
+The Web UI and HTTP API use explicit read-only stores. They do not reconcile Runs, repair Tasks or execute remote work.
 
-## Delivery phases
+## Product boundary
 
-```mermaid
-flowchart TD
-    P1[1. Targets and bounded execution] --> P2[2. Managed tools]
-    P2 --> P3[3. Runs and tasks]
-    P3 --> P4[4. Private homelab tool migration]
-    P4 --> P5[5. Skills and Hermes compatibility]
-    P5 --> P6[6. Public readiness]
-```
+The repository owns generic product code, schemas, examples, tests and documentation. Deployment-specific configuration, SSH credentials, target inventory and private tools remain outside the product repository.
 
-Each phase must leave the service usable. Later modules must not weaken the execution boundary established in phase 1.
-
-## Source boundary
-
-The HATS repository owns generic product code, schemas, examples and tests. Deployment-specific non-secret configuration, target inventory and private managed-tool or skill sources stay outside the product repository and should normally be owned by the deployment's existing private infrastructure or configuration source.
-
-A deployment does not need a dedicated private HATS overlay repository merely to keep configuration private. Use a separate private repository only when an independent lifecycle, ownership or security boundary requires one.
-
-```mermaid
-flowchart LR
-    Product[HATS product repository] --> Service[HATS service]
-    Deployment[Private deployment configuration] --> Service
-    PrivateTools[Private tool source] --> Service
-    Hermes[Hermes active skills] --> Service
-    LocalSkills[Other skill source] --> Service
-```
-
-HATS consumes configured filesystem sources. It does not own their Git, rsync or mount lifecycle.
-
-## Optional web UI
-
-HATS includes an optional Web UI in the same product repository and release rather than as a separate product. The MCP and UI are separate runtime roles:
-
-```text
-hats-mcp       # STDIO MCP entrypoint, for example as an MCP gateway child
-hats-executor  # optional separately supervised durable async execution runtime
-hats-ui        # optional HTTP entrypoint in a separate long-running container/process
-```
-
-The UI is read-only and reuses the HATS domain models and configured state through explicit read-only store access. It does not reconcile Runs, perform retention cleanup, mutate Tasks or project remote Hermes state. Its browser surface combines operational views with a user guide and curated technical documentation rendered from the repository Markdown packaged in the same release. Tooling candidates are presented inside the Tooling product area rather than as a separate primary destination.
-
-Do not run the long-lived executor or HTTP listener as an incidental child of a STDIO gateway request lifecycle. The executor must be supervised independently of `hats-mcp`. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
-
-## Execution boundary
-
-The caller selects a configured target. Target configuration owns host, port, user, identity, known-hosts file and execution limits.
-
-SSH execution is non-interactive and uses strict host-key checking, key-only authentication, no PTY, no forwarding, bounded output, bounded timeout and no automatic retry. Synchronous tools are additionally bounded by a deployment-configured transport-safe ceiling. Work above that ceiling uses explicit `start_*` submission and durable Run polling rather than extending an upstream MCP request lifetime.
-
-A failed or interrupted mutation can leave remote state ambiguous. HATS must report that ambiguity; it must not claim rollback or safe retry without evidence. Persisted Run purpose explains why an agent execution exists, while the server-generated result summary provides only bounded allowlisted result metadata. Neither field weakens the existing ban on persisting raw command/script content, argument or environment values, or stdout/stderr text.
-
-## Skills boundary
-
-Skills are read-only instructions and supporting files. A script stored inside a skill package is still skill content. It does not become a managed HATS tool automatically.
-
-The Hermes source adapter mirrors Hermes' effective skill catalog rather than only scanning directories. This includes enable/disable state and supported provenance while keeping Hermes as the authority for its own skills.
+This boundary is intentionally broader than MCP. MCP is one interface to Reach; it is not the product identity.

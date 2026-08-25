@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from hats_mcp.config import ToolSource
-from hats_mcp.managed_tools import (
+from hypershell_reach.config import ToolSource
+from hypershell_reach.managed_tools import (
     build_script_command,
     ensure_target_compatible,
     load_tool_registry,

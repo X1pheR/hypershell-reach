@@ -1,10 +1,10 @@
 schema_version: 1
 
 workspace:
-  tmp: /var/tmp/hats
-  runs: /var/lib/hats/runs
-  tasks: /var/lib/hats/tasks
-  trash: /var/lib/hats/trash
+  tmp: /var/tmp/reach
+  runs: /var/lib/reach/runs
+  tasks: /var/lib/reach/tasks
+  trash: /var/lib/reach/trash
 
 retention:
   runs:
@@ -19,13 +19,11 @@ defaults:
   max_output_bytes: 262144
 
 executor:
-  socket_path: /run/hats/executor.sock
   max_concurrency: 2
-  submission_timeout_seconds: 5
 
 sources:
   tools:
-    - id: hats
+    - id: reach
       type: bundled
       enabled: true
     - id: examples
@@ -51,5 +49,5 @@ targets:
       host: 192.0.2.10
       port: 22
       user: operator
-      identity_file: /run/secrets/hats/id_ed25519
-      known_hosts_file: /run/secrets/hats/known_hosts
+      identity_file: /run/secrets/reach/id_ed25519
+      known_hosts_file: /run/secrets/reach/known_hosts

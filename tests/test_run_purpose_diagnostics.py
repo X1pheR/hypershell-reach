@@ -5,9 +5,9 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from hats_mcp import server
-from hats_mcp.config import HATSConfig
-from hats_mcp.runs import (
+from hypershell_reach import server
+from hypershell_reach.config import ReachConfig
+from hypershell_reach.runs import (
     PURPOSE_MAX_LENGTH,
     RUN_SCHEMA_VERSION,
     RESULT_SUMMARY_MAX_LENGTH,
@@ -18,8 +18,8 @@ from hats_mcp.runs import (
 )
 
 
-def _config(tmp_path) -> HATSConfig:
-    return HATSConfig.model_validate(
+def _config(tmp_path) -> ReachConfig:
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {

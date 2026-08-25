@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from threading import Lock
+from time import monotonic
+from typing import Any, TypeVar, cast
 
 from .candidates import CandidateStore
-from .config import HATSConfig
+from .config import ReachConfig
 from .managed_tools import load_tool_registry
 from .runs import RunStore
 from .skills import inspect_skill_source, inspect_skill_source_summary
@@ -11,8 +14,11 @@ from .tasks import TaskStore
 from .tooling_registry import ToolingRegistry
 
 
-class HATSReadModel:
-    def __init__(self, config: HATSConfig) -> None:
+T = TypeVar("T")
+
+
+class ReachReadModel:
+    def __init__(self, config: ReachConfig) -> None:
         self.config = config
         self.runs = RunStore(config.workspace.runs, read_only=True)
         self.tasks = TaskStore(config.workspace.tasks, config.workspace.trash, read_only=True)
@@ -21,6 +27,19 @@ class HATSReadModel:
             if config.workspace.candidates is not None
             else None
         )
+        self._cache: dict[str, tuple[float, object]] = {}
+        self._cache_lock = Lock()
+
+    def _cached(self, key: str, ttl_seconds: float, loader: Callable[[], T]) -> T:
+        now = monotonic()
+        with self._cache_lock:
+            cached = self._cache.get(key)
+            if cached is not None and cached[0] > now:
+                return cast(T, cached[1])
+        value = loader()
+        with self._cache_lock:
+            self._cache[key] = (monotonic() + ttl_seconds, value)
+        return value
 
     def targets(self) -> list[dict[str, Any]]:
         return [
@@ -37,7 +56,11 @@ class HATSReadModel:
         ]
 
     def tooling(self) -> list[dict[str, Any]]:
-        return [script.summary() for script in load_tool_registry(self.config.sources.tools).list()]
+        return self._cached(
+            "tooling",
+            30.0,
+            lambda: [script.summary() for script in load_tool_registry(self.config.sources.tools).list()],
+        )
 
     def tool(self, tool_id: str) -> dict[str, Any]:
         return load_tool_registry(self.config.sources.tools).get(tool_id).detail()
@@ -48,11 +71,18 @@ class HATSReadModel:
     def recent_run_summaries(self, *, limit: int = 20) -> list[dict[str, Any]]:
         return [record.summary() for record in self.runs.recent(limit=limit)]
 
+    def run_count(self) -> int:
+        return self._cached("run-count", 5.0, self.runs.count)
+
     def run(self, run_id: str) -> dict[str, Any]:
         return self.runs.get(run_id).model_dump()
 
     def task_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        return [record.summary() for record in self.tasks.list(limit=limit)]
+        return self._cached(
+            f"tasks:{limit}",
+            5.0,
+            lambda: [record.summary() for record in self.tasks.list(limit=limit)],
+        )
 
     def task(self, task_id: str) -> dict[str, Any]:
         return self.tasks.get(task_id).model_dump()
@@ -61,47 +91,53 @@ class HATSReadModel:
         return [record.summary() for record in self.runs.list(task_id=task_id, limit=limit)]
 
     def skill_source_summaries(self) -> list[dict[str, Any]]:
-        reports: list[dict[str, Any]] = []
-        for source in self.config.sources.skills:
-            if not source.enabled:
-                continue
-            try:
-                reports.append(inspect_skill_source_summary(source))
-            except (OSError, RuntimeError, ValueError):
-                reports.append({"id": source.id, "type": source.type, "available": False, "count": 0})
-        return reports
+        def load() -> list[dict[str, Any]]:
+            reports: list[dict[str, Any]] = []
+            for source in self.config.sources.skills:
+                if not source.enabled:
+                    continue
+                try:
+                    reports.append(inspect_skill_source_summary(source))
+                except (OSError, RuntimeError, ValueError):
+                    reports.append({"id": source.id, "type": source.type, "available": False, "count": 0})
+            return reports
+
+        return self._cached("skill-source-summaries", 60.0, load)
 
     def skills(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        skills: list[dict[str, Any]] = []
-        reports: list[dict[str, Any]] = []
-        for source in self.config.sources.skills:
-            if not source.enabled:
-                continue
-            try:
-                packages, _ = inspect_skill_source(source)
-            except (OSError, RuntimeError, ValueError):
-                reports.append({"id": source.id, "type": source.type, "available": False})
-                continue
-            reports.append(
-                {
-                    "id": source.id,
-                    "type": source.type,
-                    "available": True,
-                    "state": "content-only" if source.type == "hermes" else "configured",
-                    "count": len(packages),
-                }
-            )
-            for package in packages:
-                skills.append(
+        def load() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            skills: list[dict[str, Any]] = []
+            reports: list[dict[str, Any]] = []
+            for source in self.config.sources.skills:
+                if not source.enabled:
+                    continue
+                try:
+                    packages, _ = inspect_skill_source(source)
+                except (OSError, RuntimeError, ValueError):
+                    reports.append({"id": source.id, "type": source.type, "available": False})
+                    continue
+                reports.append(
                     {
-                        **package.catalog_summary(),
-                        "source": package.source_id,
-                        "source_type": package.source_type,
-                        "provenance": package.provenance,
+                        "id": source.id,
+                        "type": source.type,
+                        "available": True,
+                        "state": "content-only" if source.type == "hermes" else "configured",
+                        "count": len(packages),
                     }
                 )
-        skills.sort(key=lambda item: (str(item["source"]), str(item.get("category") or ""), str(item["name"])))
-        return skills, reports
+                for package in packages:
+                    skills.append(
+                        {
+                            **package.catalog_summary(),
+                            "source": package.source_id,
+                            "source_type": package.source_type,
+                            "provenance": package.provenance,
+                        }
+                    )
+            skills.sort(key=lambda item: (str(item["source"]), str(item.get("category") or ""), str(item["name"])))
+            return skills, reports
+
+        return self._cached("skills", 60.0, load)
 
     def candidates(self) -> tuple[bool, list[dict[str, Any]]]:
         if self.candidate_store is not None:

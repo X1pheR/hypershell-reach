@@ -1,50 +1,31 @@
 # MCPJungle
 
-HATS does not depend on MCPJungle. Any MCP client that can launch a STDIO server can run `hats-mcp`.
+MCPJungle is a consumer/router of Hypershell Reach, not its runtime host. Reach runs independently as one long-lived service.
 
-For MCPJungle, a minimal registration can look like:
+## Registration
+
+Reach exposes a stateless Streamable HTTP MCP endpoint at `/mcp`. A deployment registration can use:
 
 ```json
 {
-  "name": "hats",
-  "transport": "stdio",
-  "command": "hats-mcp",
-  "env": {
-    "HATS_CONFIG": "/config/hats.yaml"
-  },
-  "session_mode": "stateful"
+  "name": "reach",
+  "transport": "streamable_http",
+  "description": "Hypershell Reach capability layer for governed agent tools, skills, execution, Runs and Tasks.",
+  "url": "http://reach:8080/mcp",
+  "session_mode": "stateless"
 }
 ```
 
-The configuration path, workspace paths, tool/skill sources and SSH credential files are deployment-owned. MCPJungle continues to launch only `hats-mcp`; it does not own durable HATS execution lifetime.
+The exact service DNS name is deployment-owned. MCPJungle does not receive Reach SSH credentials or own Reach's Run/Task workspace.
 
 ## Tool-group policy
 
-Do not expose the complete HATS server to every consumer merely because it is registered. A gateway policy can expose:
+Registration does not imply universal exposure. Keep routine clients limited to the read/capability tools they need. Administrative groups may additionally receive execution and state-mutation tools.
 
-- read-only skill discovery/retrieval to routine clients;
-- target execution, managed tools and Run/Task mutations only to administrative clients.
+Reach tool metadata does not replace gateway or caller authorization policy.
 
-HATS tool metadata does not replace gateway or agent authorization policy.
+## Lifecycle
 
-## Deployment source
+An MCPJungle request or upstream tunnel command may be cancelled independently of Reach. A `start_*` call that Reach already accepted continues because the execution manager belongs to the Reach service lifecycle, not the gateway request lifecycle.
 
-For maintained deployment, prefer installing an exact verified HATS release artifact into the gateway runtime and execute `hats-mcp` directly. This avoids a runtime dependency on a mutable Git checkout.
-
-Running from an exact clean checkout remains supported for development and transition deployments:
-
-```bash
-uv run --frozen --directory /path/to/hats-source hats-mcp
-```
-
-Any source-pin wrapper is deployment-specific and should remain outside the generic HATS repository when it contains local paths or policy.
-
-## Durable execution
-
-If `executor.socket_path` is configured, run `hats-executor` under deployment supervision independently of MCPJungle's stateful STDIO child. Both runtimes use the same immutable HATS package version, HATS configuration, Run workspace and SSH credential boundary. They communicate only through the configured private Unix socket; no additional MCPJungle server, group or public endpoint is required.
-
-A stateful MCPJungle session may still be invalidated when its upstream request is cancelled. That may terminate the `hats-mcp` STDIO child, but it does not own or cancel work already accepted by `hats-executor`.
-
-## Persistent state
-
-Keep configured Run and Task workspace paths outside ephemeral package/install directories. Stateful STDIO refers to the MCP child/session model; durable HATS continuity comes from its filesystem-backed workspace.
+If the Reach service itself stops, running asynchronous Runs are not replayed automatically. Startup reconciliation reports the interrupted boundary explicitly.

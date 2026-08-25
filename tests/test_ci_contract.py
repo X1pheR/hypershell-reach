@@ -55,9 +55,9 @@ def test_browser_container_matches_reviewed_playwright_runtime() -> None:
 
 
 def test_browser_gate_prevents_parallel_local_runs() -> None:
-    assert 'BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/hats-ci-browser.lock}"' in BROWSER
+    assert 'BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/reach-ci-browser.lock}"' in BROWSER
     assert 'flock -n 9' in BROWSER
-    assert 'Another HATS browser acceptance run is already active' in BROWSER
+    assert 'Another Hypershell Reach browser acceptance run is already active' in BROWSER
 
 
 def test_browser_gate_has_a_hard_test_timeout() -> None:
@@ -69,7 +69,7 @@ def test_browser_gate_has_a_hard_test_timeout() -> None:
 
 def test_browser_results_are_isolated_per_run() -> None:
     assert 'BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"' in BROWSER
-    assert 'APP_LOG="${BROWSER_RESULTS_DIR}/hats-ui.log"' in BROWSER
+    assert 'APP_LOG="${BROWSER_RESULTS_DIR}/reach.log"' in BROWSER
     assert 'rm -rf "${BROWSER_RESULTS_DIR:?}"/*' not in BROWSER
 
 

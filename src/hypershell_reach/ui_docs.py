@@ -41,7 +41,7 @@ class RenderedDocument:
 USER_GUIDE = DocumentationPage(
     slug="user-guide",
     title="User guide",
-    description="Understand the HATS UI and what each read-only view means.",
+    description="Understand the Hypershell Reach UI and what each read-only view means.",
     filename="user-guide.md",
     group="Guide",
 )
@@ -49,7 +49,7 @@ USER_GUIDE = DocumentationPage(
 TECHNICAL_DOCS = (
     DocumentationPage("architecture", "Architecture", "Product boundaries and module structure.", "architecture.md", "Product"),
     DocumentationPage("security", "Security", "Execution, authorization and secret-handling boundaries.", "security.md", "Product"),
-    DocumentationPage("installation", "Installation", "Install and upgrade an immutable HATS release.", "installation.md", "Operate"),
+    DocumentationPage("installation", "Installation", "Install and upgrade an immutable Hypershell Reach release.", "installation.md", "Operate"),
     DocumentationPage("configuration", "Configuration", "Configure workspaces, targets, tooling and skills.", "configuration.md", "Operate"),
     DocumentationPage("mcpjungle", "MCPJungle", "Optional MCPJungle deployment guidance.", "mcpjungle.md", "Operate"),
     DocumentationPage("runs-and-tasks", "Runs and tasks", "Execution evidence and continuity state.", "runs-and-tasks.md", "Reference"),
@@ -85,7 +85,7 @@ def _docs_root() -> Path:
     checkout = Path(__file__).resolve().parents[2] / "docs"
     if checkout.is_dir():
         return checkout
-    raise FileNotFoundError("HATS documentation files are unavailable")
+    raise FileNotFoundError("Hypershell Reach documentation files are unavailable")
 
 
 def _slug(value: str) -> str:

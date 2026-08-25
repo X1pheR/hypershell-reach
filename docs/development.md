@@ -1,6 +1,6 @@
 # Development
 
-HATS uses Python 3.12+, `uv`, Pydantic and the Python MCP SDK.
+Hypershell Reach uses Python 3.12+, `uv`, Pydantic and the Python MCP SDK.
 
 ## Setup
 
@@ -20,7 +20,7 @@ Browser acceptance uses one repository-owned entrypoint:
 bash scripts/ci-browser.sh
 ```
 
-The browser harness builds the current checkout, starts HATS UI and Playwright as sibling containers on an ephemeral Docker network, and reaches the UI by container DNS. It does not depend on host networking, loopback crossing container boundaries or host-visible checkout bind mounts. This makes the same entrypoint usable from a normal runner or from an explicitly Docker-enabled nested orchestrator.
+The browser harness builds the current checkout, starts Hypershell Reach UI and Playwright as sibling containers on an ephemeral Docker network, and reaches the UI by container DNS. It does not depend on host networking, loopback crossing container boundaries or host-visible checkout bind mounts. This makes the same entrypoint usable from a normal runner or from an explicitly Docker-enabled nested orchestrator.
 
 Do not wrap this entrypoint in another ad-hoc container topology. If an execution environment cannot provide the Docker contract required by the script, treat that environment as unsupported instead of approximating CI with different networking or mount semantics.
 
@@ -30,7 +30,7 @@ Do not wrap this entrypoint in another ad-hoc container topology. If an executio
 .
 ├── docs/
 ├── examples/
-├── src/hats_mcp/
+├── src/hypershell_reach/
 │   ├── bundled_tools/
 │   ├── cli.py
 │   ├── config.py

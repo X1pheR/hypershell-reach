@@ -4,18 +4,18 @@ import json
 
 import pytest
 
-from hats_mcp import server
-from hats_mcp.config import HATSConfig
+from hypershell_reach import server
+from hypershell_reach.config import ReachConfig
 
 
-def _config(tmp_path) -> HATSConfig:
+def _config(tmp_path) -> ReachConfig:
     skill_dir = tmp_path / "skills/example"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: example\ndescription: Example skill.\n---\n# Example\n\nInstructions.\n",
         encoding="utf-8",
     )
-    return HATSConfig.model_validate(
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {

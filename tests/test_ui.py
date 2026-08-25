@@ -5,14 +5,14 @@ from pathlib import Path
 
 from starlette.testclient import TestClient
 
-from hats_mcp.config import HATSConfig
-from hats_mcp.runs import RunStore
-from hats_mcp.tasks import TaskStore
-from hats_mcp.ui import create_app
-from hats_mcp.ui_docs import DocumentationPage, render_document
+from hypershell_reach.config import ReachConfig
+from hypershell_reach.runs import RunStore
+from hypershell_reach.tasks import TaskStore
+from hypershell_reach.ui import create_app
+from hypershell_reach.ui_docs import DocumentationPage, render_document
 
 
-def _config(tmp_path: Path) -> HATSConfig:
+def _config(tmp_path: Path) -> ReachConfig:
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "inspect.py").write_text(
@@ -30,7 +30,7 @@ def _config(tmp_path: Path) -> HATSConfig:
         """### ATR-999 — Example gap\n- **Status:** observed\n- **Promotion:** candidate\n- **Promotion reason:** Repeated bounded gap.\n- **Helper candidate or implementation:** example.inspect\n""",
         encoding="utf-8",
     )
-    return HATSConfig.model_validate(
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {
@@ -109,10 +109,11 @@ def test_ui_exposes_canonical_application_shell_and_primary_navigation(tmp_path)
     assert 'id="mobile-menu-toggle"' in home.text
     assert 'aria-controls="mobile-navigation"' in home.text
     assert 'id="mobile-navigation"' in home.text
-    assert 'class="brand-mark" src="/assets/hats-mark.svg"' in home.text
-    assert '<link rel="icon" href="/assets/hats-mark.svg" type="image/svg+xml">' in home.text
+    assert 'class="navigation-progress" aria-hidden="true"' in home.text
+    assert 'class="brand-mark" src="/assets/reach-mark.svg"' in home.text
+    assert '<link rel="icon" href="/assets/reach-mark.svg" type="image/svg+xml">' in home.text
     assert "Read-only" in home.text
-    assert client.get("/healthz").json() == {"status": "ok", "role": "hats-ui"}
+    assert client.get("/healthz").json() == {"status": "ok", "role": "reach"}
     assert client.post("/targets").status_code == 405
 
 
@@ -140,7 +141,7 @@ def test_help_exposes_user_and_curated_technical_reference_with_docs_compatibili
     assert user_guide.status_code == 200
     assert "Help" in user_guide.text
     assert "Technical reference" in user_guide.text
-    assert "What HATS is" in user_guide.text
+    assert "What Hypershell Reach is" in user_guide.text
     assert "Managed tools" in user_guide.text
     assert "Tooling candidates" in user_guide.text
 
@@ -171,7 +172,7 @@ def test_documentation_renderer_escapes_raw_html_and_rejects_javascript_links(tm
         "# Security test\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("hats_mcp.ui_docs._docs_root", lambda: docs)
+    monkeypatch.setattr("hypershell_reach.ui_docs._docs_root", lambda: docs)
     page = DocumentationPage(
         slug="security-test",
         title="Security test",
@@ -231,13 +232,16 @@ def test_html_and_assets_use_defensive_headers_without_inline_script_policy(tmp_
 
     javascript = client.get("/assets/app.js")
     assert javascript.status_code == 200
+    assert "is-navigating" in javascript.text
+    assert "aria-busy" in javascript.text
+    assert ".navigation-progress" in css.text
     assert "mobile-navigation" in javascript.text
     assert "Escape" in javascript.text
 
-    mark = client.get("/assets/hats-mark.svg")
+    mark = client.get("/assets/reach-mark.svg")
     assert mark.status_code == 200
     assert mark.headers["content-type"].startswith("image/svg+xml")
-    assert 'aria-label="HATS product mark"' in mark.text
+    assert 'aria-label="Hypershell Reach product mark"' in mark.text
     assert mark.text.count("<circle") == 3
     assert "#ff2093" in mark.text
     assert "#3c6cfe" in mark.text
@@ -250,7 +254,7 @@ def test_skills_view_distinguishes_unavailable_source_from_empty(tmp_path, monke
     def unavailable(*_args, **_kwargs):
         raise PermissionError("source cannot be read")
 
-    monkeypatch.setattr("hats_mcp.read_model.inspect_skill_source", unavailable)
+    monkeypatch.setattr("hypershell_reach.read_model.inspect_skill_source", unavailable)
     response = client.get("/skills")
 
     assert response.status_code == 200
@@ -291,8 +295,8 @@ def test_overview_uses_lightweight_summaries_instead_of_full_detail_loaders(tmp_
     def detail_loader_used(*_args, **_kwargs):
         raise RuntimeError("detail loader should not be used by overview")
 
-    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.run_summaries", detail_loader_used)
-    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.skills", detail_loader_used)
+    monkeypatch.setattr("hypershell_reach.read_model.ReachReadModel.run_summaries", detail_loader_used)
+    monkeypatch.setattr("hypershell_reach.read_model.ReachReadModel.skills", detail_loader_used)
 
     response = client.get("/")
 
@@ -319,7 +323,7 @@ def test_growing_views_use_server_rendered_discovery_controls_and_filtered_empty
         }
         for index in range(30)
     ]
-    monkeypatch.setattr("hats_mcp.read_model.HATSReadModel.run_summaries", lambda self, limit=100: run_rows)
+    monkeypatch.setattr("hypershell_reach.read_model.ReachReadModel.run_summaries", lambda self, limit=100: run_rows)
     client = TestClient(create_app(config))
 
     first = client.get("/runs")
@@ -364,7 +368,7 @@ def test_shell_separates_runtime_availability_from_read_only_mode_and_contextual
     assert 'href="/help/technical/runs-and-tasks"' in response.text
 
 
-from hats_mcp.candidates import (
+from hypershell_reach.candidates import (
     CandidateOwnership,
     CandidateProblem,
     CandidateProposal,
@@ -377,7 +381,7 @@ def _wp6_detail_client(tmp_path: Path) -> tuple[TestClient, str, str, str, str]:
     config = _config(tmp_path)
     payload = config.model_dump()
     payload["workspace"]["candidates"] = str(tmp_path / "candidates")
-    config = HATSConfig.model_validate(payload)
+    config = ReachConfig.model_validate(payload)
 
     task = TaskStore(config.workspace.tasks, config.workspace.trash).create(
         title="WP6 continuity fixture",
@@ -478,7 +482,7 @@ def _wp6_detail_client(tmp_path: Path) -> tuple[TestClient, str, str, str, str]:
                 "acceptance": ["Task, Run and managed Tool references resolve to exact read-only detail pages."],
             }
         ),
-        ownership=CandidateOwnership(owner_id="X1pheR/homelab-agent-tooling-skills-mcp"),
+        ownership=CandidateOwnership(owner_id="X1pheR/hypershell-reach"),
         promotion_rationale="The bounded relationship view is reusable product behavior.",
     )
     candidate = candidates.transition(
@@ -553,7 +557,7 @@ def test_wp6_candidate_detail_renders_contract_and_exact_task_tool_links(tmp_pat
         "List-only views hide the decision context.",
         "Render read-only provenance detail with exact relationships.",
         "Read persisted safe metadata only; never render raw execution content.",
-        "X1pheR/homelab-agent-tooling-skills-mcp",
+        "X1pheR/hypershell-reach",
         "Acceptance contract",
         "Task, Run and managed Tool references resolve to exact read-only detail pages.",
     ):
@@ -593,3 +597,37 @@ def test_wp6_structured_candidate_detail_fails_closed_when_store_is_not_configur
 
     assert response.status_code == 404
     assert response.text == "Structured Candidate detail is not available."
+
+
+def test_read_only_api_exposes_bounded_product_inventory(tmp_path) -> None:
+    client = _client(tmp_path)
+
+    summary = client.get("/api/v1/summary")
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "product": "Hypershell Reach",
+        "status": "ok",
+        "counts": {"skills": 1, "tools": 1, "tasks": 1, "runs": 1},
+    }
+
+    skills = client.get("/api/v1/skills").json()
+    assert skills["count"] == 1
+    assert skills["items"][0]["id"] == "local:example"
+    assert "provenance" not in skills["items"][0]
+
+    tools = client.get("/api/v1/tools").json()
+    assert tools["count"] == 1
+    assert tools["items"][0]["id"] == "system.inspect"
+
+    tasks = client.get("/api/v1/tasks").json()
+    assert tasks["count"] == 1
+    assert tasks["items"][0]["title"] == "Example task"
+    assert "objective" not in tasks["items"][0]
+    assert "continuity" not in tasks["items"][0]
+
+    runs = client.get("/api/v1/runs?limit=1").json()
+    assert runs["count"] == 1
+    assert runs["total"] == 1
+    assert len(runs["items"]) == 1
+
+    assert client.post("/api/v1/summary").status_code == 405

@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from hats_mcp.runs import RunStore
+from hypershell_reach.runs import RunStore
 
 
 class Clock:
@@ -317,3 +317,61 @@ def test_run_mutations_use_one_bounded_coordination_lock(tmp_path) -> None:
 
     assert (tmp_path / ".write.lock").is_file()
     assert not (tmp_path / ".locks").exists()
+
+
+def test_list_runs_stops_reading_after_unfiltered_limit(tmp_path, monkeypatch) -> None:
+    store = RunStore(tmp_path / "runs")
+    for index in range(12):
+        record = store.create(
+            operation="run_command",
+            target="docker",
+            timeout_seconds=30,
+            may_mutate=False,
+            purpose=f"run {index}",
+        )
+        store.finish(
+            record.id,
+            {
+                "status": "succeeded",
+                "exit_code": 0,
+                "timed_out": False,
+                "duration_ms": 1,
+                "stdout": {"bytes": 0, "truncated": False},
+                "stderr": {"bytes": 0, "truncated": False},
+            },
+        )
+
+    read_count = 0
+    original = store._read_path
+
+    def counted(path):
+        nonlocal read_count
+        read_count += 1
+        return original(path)
+
+    monkeypatch.setattr(store, "_read_path", counted)
+    records = store.list(limit=3)
+
+    assert len(records) == 3
+    assert read_count == 3
+    assert [record.id for record in records] == sorted(
+        [record.id for record in records], reverse=True
+    )
+
+
+def test_run_store_count_does_not_parse_records(tmp_path, monkeypatch) -> None:
+    store = RunStore(tmp_path / "runs")
+    for _ in range(4):
+        store.create(
+            operation="run_command",
+            target="docker",
+            timeout_seconds=30,
+            may_mutate=False,
+        )
+
+    monkeypatch.setattr(
+        store,
+        "_read_path",
+        lambda _path: (_ for _ in ()).throw(AssertionError("count must not parse records")),
+    )
+    assert store.count() == 4

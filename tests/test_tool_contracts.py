@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from hats_mcp.server import list_tools
+from hypershell_reach.server import list_tools
 
 
 def test_tools_have_truthful_annotations() -> None:

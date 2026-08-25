@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from hats_mcp.config import Target
-from hats_mcp.execution import _read_bounded, _redact, build_ssh_argv, classify_status
+from hypershell_reach.config import Target
+from hypershell_reach.execution import _read_bounded, _redact, build_ssh_argv, classify_status
 
 
 def _target() -> Target:
@@ -16,8 +16,8 @@ def _target() -> Target:
             "ssh": {
                 "host": "203.0.113.10",
                 "user": "operator",
-                "identity_file": "/run/secrets/hats/key",
-                "known_hosts_file": "/run/secrets/hats/known_hosts",
+                "identity_file": "/run/secrets/reach/key",
+                "known_hosts_file": "/run/secrets/reach/known_hosts",
             },
         }
     )
@@ -51,7 +51,7 @@ def test_remote_command_rejects_nul_bytes() -> None:
 
 def test_error_redaction_hides_host_and_paths() -> None:
     target = _target()
-    text = "203.0.113.10 /run/secrets/hats/key /run/secrets/hats/known_hosts"
+    text = "203.0.113.10 /run/secrets/reach/key /run/secrets/reach/known_hosts"
     redacted = _redact(text, "example", target)
     assert "203.0.113.10" not in redacted
     assert "/run/secrets" not in redacted
@@ -134,10 +134,10 @@ async def test_cancellation_kills_ssh_process_group(tmp_path, monkeypatch) -> No
         process.killed()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-    monkeypatch.setattr("hats_mcp.execution.os.killpg", fake_killpg)
+    monkeypatch.setattr("hypershell_reach.execution.os.killpg", fake_killpg)
 
     task = asyncio.create_task(
-        __import__("hats_mcp.execution", fromlist=["run_ssh"]).run_ssh(
+        __import__("hypershell_reach.execution", fromlist=["run_ssh"]).run_ssh(
             target_id="example",
             target=target,
             remote_command="sleep 300",

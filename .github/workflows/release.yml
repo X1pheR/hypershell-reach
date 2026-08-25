@@ -50,5 +50,5 @@ jobs:
             dist/*.tar.gz \
             SHA256SUMS \
             --verify-tag \
-            --title "HATS ${GITHUB_REF_NAME}" \
+            --title "Hypershell Reach ${GITHUB_REF_NAME}" \
             --notes-from-tag

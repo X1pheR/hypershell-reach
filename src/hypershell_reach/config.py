@@ -246,7 +246,7 @@ class Target(BaseModel):
         return self
 
 
-class HATSConfig(BaseModel):
+class ReachConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1]
@@ -258,7 +258,7 @@ class HATSConfig(BaseModel):
     targets: dict[str, Target]
 
     @model_validator(mode="after")
-    def validate_target_ids(self) -> "HATSConfig":
+    def validate_target_ids(self) -> "ReachConfig":
         if not self.targets:
             raise ValueError("at least one target is required")
         invalid = sorted(target_id for target_id in self.targets if not _TARGET_ID.fullmatch(target_id))
@@ -314,24 +314,24 @@ class HATSConfig(BaseModel):
         return target.max_output_bytes or self.defaults.max_output_bytes
 
 
-def load_config(path: str | Path | None = None) -> HATSConfig:
-    configured_path = path if path is not None else os.environ.get("HATS_CONFIG")
+def load_config(path: str | Path | None = None) -> ReachConfig:
+    configured_path = path if path is not None else os.environ.get("REACH_CONFIG")
     if configured_path is None or not str(configured_path).strip():
-        raise RuntimeError("HATS_CONFIG is not set")
+        raise RuntimeError("REACH_CONFIG is not set")
 
     config_path = Path(configured_path)
     try:
         payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise RuntimeError(f"HATS config not found: {config_path}") from exc
+        raise RuntimeError(f"Hypershell Reach config not found: {config_path}") from exc
     except IsADirectoryError as exc:
-        raise RuntimeError(f"HATS config is not a file: {config_path}") from exc
+        raise RuntimeError(f"Hypershell Reach config is not a file: {config_path}") from exc
     except PermissionError as exc:
-        raise RuntimeError(f"HATS config is not readable: {config_path}") from exc
+        raise RuntimeError(f"Hypershell Reach config is not readable: {config_path}") from exc
     except yaml.YAMLError as exc:
-        raise RuntimeError(f"HATS config is invalid YAML: {exc}") from exc
+        raise RuntimeError(f"Hypershell Reach config is invalid YAML: {exc}") from exc
 
     try:
-        return HATSConfig.model_validate(payload)
+        return ReachConfig.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"HATS config failed validation: {exc}") from exc
+        raise RuntimeError(f"Hypershell Reach config failed validation: {exc}") from exc

@@ -1,77 +1,35 @@
-# Web UI
+# Web UI and read-only API
 
-HATS includes an optional read-only HTTP runtime named `hats-ui`. It is delivered from the same source repository and release as `hats-mcp`, but runs as a separate process or container.
+The Web UI and read-only API are built into the main Hypershell Reach service. They are not separate deployments.
 
-## Purpose
+## Web UI
 
-The Web UI provides browser-based visibility into HATS without becoming another writer for HATS state. Its primary destinations are:
+The UI provides read-only views for Overview, Targets, Tooling, Runs, Tasks, Skills and Documentation. It uses `ReachReadModel`, which opens Run and Task stores read-only and exposes only bounded summaries.
 
-- Overview;
-- Targets;
-- Tooling;
-- Runs;
-- Tasks;
-- Skills;
-- Documentation.
+The browser surface does not show target connection addresses, SSH users, credential paths or values, command/script bodies, command output or full Task continuity.
 
-Tooling contains both registered managed tools and reviewed tooling candidates. Documentation separates a plain-language user guide from curated technical documentation.
+## Read-only API
 
-The UI reuses the existing HATS configuration, domain models and file-backed stores. `RunStore` and `TaskStore` are opened in explicit read-only mode, so the UI does not reconcile runs, perform retention cleanup, create tasks or update persisted state.
+The same sanitized read model backs:
 
-## Documentation model
+- `GET /api/v1/summary`;
+- `GET /api/v1/skills`;
+- `GET /api/v1/tools`;
+- `GET /api/v1/tasks`;
+- `GET /api/v1/runs?limit=N`.
 
-The user guide is maintained in [`user-guide.md`](user-guide.md).
+`/api/v1/summary` is intended for small internal dashboard widgets. The inventory endpoints are read-only inspection surfaces, not administration APIs.
 
-Technical pages are rendered from the existing repository Markdown files. They are packaged into the release wheel and container image rather than copied into a second HTML documentation set. This keeps architecture, security, installation, configuration, operations, skills, tools, development and release guidance under one source of truth.
+## Performance
 
-Markdown is rendered with raw HTML disabled. Only an explicit curated list of repository documents is addressable through the technical documentation routes.
-
-## Information boundary
-
-The UI renders only bounded summaries. It does not render target connection addresses, SSH users, credential paths, credential values, managed-script source code, run command text, run output content or full task-continuity evidence.
-
-Hermes skill content can be scanned from a configured read-only filesystem source. The UI does not perform SSH calls to project Hermes' live effective enable/disable state. `hats-mcp` remains the authority for the live effective skill catalog.
-
-## Application shell
-
-The maintained UI uses a compact top application bar with the HATS identity, centered primary destinations and a visible read-only utility state. Smaller viewports replace the desktop destinations with one off-canvas navigation dialog using the same information architecture.
-
-Pages use bounded content regions, native tables for repeated data and page-local documentation navigation. Status meaning is written as text and is never conveyed only through color.
-
-The shell includes a skip link, visible keyboard focus, reduced-motion handling, forced-colors fallbacks and responsive layouts that keep horizontal overflow inside intentionally scrollable data regions.
+Large Run workspaces use newest-first bounded reads rather than parsing every Run before applying a limit. Process-local caches reduce repeated filesystem/source scanning for Tasks, tools and skills. Runs remain near-live; only the total Run count receives a short cache.
 
 ## Runtime
 
-Install the exact HATS release wheel; the same artifact provides both entrypoints:
+Start the complete product service:
 
 ```bash
-uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
+REACH_CONFIG=/path/to/reach.yaml reach --host 0.0.0.0 --port 8080
 ```
 
-Start the HTTP runtime with the same deployment configuration used by HATS:
-
-```bash
-HATS_CONFIG=/path/to/hats.yaml hats-ui --host 127.0.0.1 --port 8080
-```
-
-The default bind is loopback. A deployment that exposes the UI through a reverse proxy should keep authentication, TLS, DNS and ingress policy outside the generic HATS product.
-
-The repository Dockerfile packages the UI role and listens on container port `8080`. It does not replace the existing `hats-mcp` STDIO deployment contract.
-
-## HTTP surface
-
-The UI serves read-oriented routes:
-
-- `/`
-- `/targets`
-- `/tooling`
-- `/runs`
-- `/tasks`
-- `/skills`
-- `/help`
-- `/help/technical/{slug}` for curated technical reference pages
-- `/healthz`
-
-`/docs` and `/docs/technical/{slug}` remain compatibility redirects into Help. `/candidates` remains a compatibility redirect to the Tooling candidates section.
-
-The UI also serves its local stylesheet and navigation script under `/assets/`. HTML responses disable caching and use a restrictive Content Security Policy that permits only same-origin stylesheet and script assets. Mutating HTTP methods are not implemented.
+The maintained container exposes port `8080`. Authentication, TLS, DNS and external ingress remain deployment responsibilities.

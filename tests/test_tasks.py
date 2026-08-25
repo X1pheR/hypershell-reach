@@ -7,7 +7,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from hats_mcp.tasks import TaskStore
+from hypershell_reach.tasks import TaskStore
 
 
 class Clock:
@@ -278,7 +278,7 @@ def test_retention_deletes_only_safely_archived_terminal_records(tmp_path) -> No
 
 def test_cleanup_fsyncs_archive_root_after_retention_delete(tmp_path, monkeypatch) -> None:
     import os
-    import hats_mcp.tasks as tasks_module
+    import hypershell_reach.tasks as tasks_module
 
     now = datetime(2026, 8, 22, tzinfo=timezone.utc)
     archive = tmp_path / "archive"

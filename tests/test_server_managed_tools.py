@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from hats_mcp.config import HATSConfig
-from hats_mcp import server
+from hypershell_reach.config import ReachConfig
+from hypershell_reach import server
 
 
 def _write_script(path: Path) -> None:
@@ -33,8 +33,8 @@ printf '%s\\n' \"$@\"
     )
 
 
-def _config(tool_root: Path) -> HATSConfig:
-    return HATSConfig.model_validate(
+def _config(tool_root: Path) -> ReachConfig:
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {

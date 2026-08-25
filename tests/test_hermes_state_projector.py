@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROJECTOR = Path(__file__).parents[1] / "src/hats_mcp/hermes_state_projector.py"
+PROJECTOR = Path(__file__).parents[1] / "src/hypershell_reach/hermes_state_projector.py"
 
 
 def test_projector_returns_only_skill_state_and_effective_names(tmp_path) -> None:

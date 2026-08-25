@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from hats_mcp.config import SkillSource
-from hats_mcp.skills import (
+from hypershell_reach.config import SkillSource
+from hypershell_reach.skills import (
     HermesState,
     build_skill_registry,
     read_skill_file,

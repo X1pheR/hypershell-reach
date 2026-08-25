@@ -317,13 +317,25 @@ class RunStore:
     ) -> list[RunRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("run list limit must be between 1 and 500")
-        records = [self._read_path(path) for path in self.root.glob("run-*.json") if path.is_file()]
-        if status is not None:
-            records = [record for record in records if record.status == status]
-        if task_id is not None:
-            records = [record for record in records if record.task_id == task_id]
-        records.sort(key=lambda record: (record.started_at, record.id), reverse=True)
-        return records[:limit]
+        paths = sorted(
+            (path for path in self.root.glob("run-*.json") if path.is_file()),
+            key=lambda path: path.name,
+            reverse=True,
+        )
+        records: list[RunRecord] = []
+        for path in paths:
+            record = self._read_path(path)
+            if status is not None and record.status != status:
+                continue
+            if task_id is not None and record.task_id != task_id:
+                continue
+            records.append(record)
+            if len(records) >= limit:
+                break
+        return records
+
+    def count(self) -> int:
+        return sum(1 for path in self.root.glob("run-*.json") if path.is_file())
 
     def recent(self, *, limit: int = 20) -> list[RunRecord]:
         if limit < 1 or limit > 100:

@@ -4,13 +4,13 @@ import asyncio
 
 import pytest
 
-from hats_mcp import executor
-from hats_mcp.config import HATSConfig
-from hats_mcp.runs import RunStore
+from hypershell_reach import executor
+from hypershell_reach.config import ReachConfig
+from hypershell_reach.runs import RunStore
 
 
-def _config(tmp_path) -> HATSConfig:
-    return HATSConfig.model_validate(
+def _config(tmp_path) -> ReachConfig:
+    return ReachConfig.model_validate(
         {
             "schema_version": 1,
             "workspace": {
@@ -119,12 +119,12 @@ async def test_explicit_cancellation_is_deterministic_and_idempotent(tmp_path, m
         await service.stop()
 
 
-def test_executor_has_installed_console_entrypoint() -> None:
+def test_product_has_single_installed_console_entrypoint() -> None:
     import tomllib
     from pathlib import Path
 
     pyproject = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
-    assert pyproject["project"]["scripts"]["hats-executor"] == "hats_mcp.executor:main"
+    assert pyproject["project"]["scripts"] == {"reach": "hypershell_reach.service:main"}
 
 
 @pytest.mark.asyncio

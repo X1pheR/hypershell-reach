@@ -1,6 +1,6 @@
 # Task storage migration
 
-This document defines the public HATS Task copy-and-validate contract. It does **not** authorize or perform a live deployment switch.
+This document defines the public Hypershell Reach Task copy-and-validate contract. It does **not** authorize or perform a live deployment switch.
 
 ## Boundary
 
@@ -13,12 +13,12 @@ The migration helper is intentionally narrower than deployment orchestration:
 5. re-inspect the source and reject source drift;
 6. report whether the copy is ready for a separately governed switch.
 
-The helper never changes HATS configuration and never deletes, renames or retires the source roots.
+The helper never changes Hypershell Reach configuration and never deletes, renames or retires the source roots.
 
 ## Public API
 
 ```python
-from hats_mcp.task_migration import (
+from hypershell_reach.task_migration import (
     copy_and_validate_task_storage,
     inspect_task_storage,
 )
@@ -46,7 +46,7 @@ Run records are outside the Task migration write set. Existing `Run.task_id` val
 
 ## Legacy evidence directories
 
-New HATS Tasks no longer create `evidence/` directories. During migration:
+New Hypershell Reach Tasks no longer create `evidence/` directories. During migration:
 
 - absent evidence directories remain absent;
 - empty legacy evidence directories are omitted from the target copy and reported as removed-empty candidates;
@@ -67,13 +67,13 @@ Before source retirement, rollback is therefore simply a deployment decision not
 
 A live migration is a separate deployment operation. At minimum it should:
 
-1. identify the exact public HATS build and private deployment revision;
+1. identify the exact public Hypershell Reach build and private deployment revision;
 2. record current source counts and the migration preimage;
 3. quiesce Task writers so the final copy cannot race with live mutations;
 4. run copy-and-validate into the accepted target active/archive roots;
 5. confirm `switch_ready=true`, counts, duplicate checks and any non-empty evidence review items;
 6. change deployment-owned configuration from the legacy roots to the target roots;
-7. start the compatible HATS build only after the target binding is active;
+7. start the compatible Hypershell Reach build only after the target binding is active;
 8. verify Task reads, open-state invariants, archived terminal Tasks and existing `Run.task_id` relationships;
 9. keep the legacy roots intact for rollback until the deployment acceptance window is complete;
 10. retire legacy roots only through a separately authorized cleanup step.
