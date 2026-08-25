@@ -274,3 +274,29 @@ def test_validate_checks_configured_candidate_workspace(tmp_path: Path) -> None:
 
     assert report.valid is True
     assert f"candidates: {candidate_root} [writable]" in report.text
+
+
+def test_validate_reports_transport_safe_timeout_and_executor_configuration(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["defaults"] = {
+        "max_timeout_seconds": 300,
+        "max_synchronous_timeout_seconds": 90,
+    }
+    payload["executor"] = {
+        "socket_path": str(tmp_path / "runtime" / "executor.sock"),
+        "max_concurrency": 2,
+        "submission_timeout_seconds": 5,
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert "Execution timeout: 300s" in report.text
+    assert "Synchronous timeout: 90s" in report.text
+    assert "Async executor" in report.text
+    assert f"Socket: {tmp_path / 'runtime' / 'executor.sock'}" in report.text
+    assert "Status: ready" in report.text
+    assert "Max concurrency: 2" in report.text
+    assert "Submission timeout: 5s" in report.text

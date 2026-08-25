@@ -11,13 +11,15 @@ HATS is a small MCP service for capabilities that are specific to a homelab and 
 ```mermaid
 flowchart LR
     Agent[Agent] --> Gateway[MCP gateway]
-    Gateway --> HATS[HATS]
+    Gateway --> HATS[HATS MCP]
     HATS --> Targets[Configured targets]
     HATS --> Tools[Managed tool sources]
     HATS --> Skills[Skill sources]
+    HATS --> Executor[Optional durable executor]
+    Executor --> Targets
 ```
 
-The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent Run purpose and bounded result metadata, task continuity, progressive read-only Agent Skills discovery, tooling-candidate visibility and an optional read-only Web UI with integrated documentation.
+The current implementation provides configured targets, bounded SSH execution, registry-backed managed scripts, persistent Run purpose and bounded result metadata, durable asynchronous execution for work that can outlive an MCP request, task continuity, progressive read-only Agent Skills discovery, tooling-candidate visibility and an optional read-only Web UI with integrated documentation.
 
 ## Design
 
@@ -48,6 +50,13 @@ workspace:
   runs: /var/lib/hats/runs
   tasks: /var/lib/hats/tasks
   trash: /var/lib/hats/trash
+
+defaults:
+  max_timeout_seconds: 300
+  max_synchronous_timeout_seconds: 90
+
+executor:
+  socket_path: /run/hats/executor.sock
 
 sources:
   tools:
@@ -90,7 +99,10 @@ HATS currently exposes:
 - `list_targets`
 - `list_scripts`
 - `get_script`
-- `run_script`
+- `run_script` / `start_script`
+- `run_command` / `start_command`
+- `run_shell` / `start_shell`
+- `cancel_run`
 - `list_runs`
 - `get_run`
 - `set_run_retained`
@@ -110,8 +122,6 @@ HATS currently exposes:
 - `approve_candidate` / `block_candidate` / `mark_candidate_not_warranted` — explicit lifecycle transitions
 - `link_candidate_task` — link an approved Candidate to an existing HATS Task
 - `complete_candidate` — record an implemented or automated outcome and final capability reference
-- `run_command`
-- `run_shell`
 
 Skill content remains read-only and never becomes executable tooling automatically.
 

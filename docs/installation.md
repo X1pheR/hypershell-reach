@@ -27,7 +27,14 @@ The base install provides the STDIO command:
 hats-mcp
 ```
 
-The same wheel also installs the optional Web UI runtime:
+The same wheel also installs the optional durable executor and Web UI runtimes:
+
+```bash
+HATS_CONFIG=/path/to/hats.yaml hats-executor
+```
+
+`hats-executor` must be supervised independently of an MCP STDIO child when `executor.socket_path` is configured. It requires the same deployment configuration, Run workspace and SSH credential mounts as `hats-mcp`, plus access to the configured private Unix-socket path.
+
 
 ```bash
 uv tool install ./homelab_agent_tooling_skills_mcp-X.Y.Z-py3-none-any.whl
@@ -56,7 +63,8 @@ This is a development and transition model. Maintained deployment should prefer 
 2. Install the selected exact wheel into the deployment environment.
 3. Keep deployment configuration separate from the generic product source.
 4. Run `hats-mcp validate`.
-5. Start or refresh only the HATS MCP child.
-6. Re-run consumer acceptance for target execution, managed tools, tooling candidates and configured skill adapters that changed.
+5. When durable execution is configured, start or refresh the separately supervised `hats-executor` before the HATS MCP child and verify its private socket is available.
+6. Start or refresh the HATS MCP child.
+7. Re-run consumer acceptance for target execution, managed tools, tooling candidates and configured skill adapters that changed.
 
 Persistent Runs and Tasks live in configured workspace paths and are independent of the Python package installation. Do not remove those paths as part of a normal package upgrade.

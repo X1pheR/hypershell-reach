@@ -16,7 +16,7 @@ For MCPJungle, a minimal registration can look like:
 }
 ```
 
-The configuration path, workspace paths, tool/skill sources and SSH credential files are deployment-owned.
+The configuration path, workspace paths, tool/skill sources and SSH credential files are deployment-owned. MCPJungle continues to launch only `hats-mcp`; it does not own durable HATS execution lifetime.
 
 ## Tool-group policy
 
@@ -38,6 +38,12 @@ uv run --frozen --directory /path/to/hats-source hats-mcp
 ```
 
 Any source-pin wrapper is deployment-specific and should remain outside the generic HATS repository when it contains local paths or policy.
+
+## Durable execution
+
+If `executor.socket_path` is configured, run `hats-executor` under deployment supervision independently of MCPJungle's stateful STDIO child. Both runtimes use the same immutable HATS package version, HATS configuration, Run workspace and SSH credential boundary. They communicate only through the configured private Unix socket; no additional MCPJungle server, group or public endpoint is required.
+
+A stateful MCPJungle session may still be invalidated when its upstream request is cancelled. That may terminate the `hats-mcp` STDIO child, but it does not own or cancel work already accepted by `hats-executor`.
 
 ## Persistent state
 

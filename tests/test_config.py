@@ -182,3 +182,48 @@ def test_candidate_workspace_path_is_optional_and_must_be_absolute() -> None:
     payload["workspace"]["candidates"] = "relative/candidates"
     with pytest.raises(ValidationError, match="workspace paths must be absolute"):
         HATSConfig.model_validate(payload)
+
+
+def test_synchronous_timeout_can_be_stricter_than_execution_timeout() -> None:
+    payload = _config()
+    payload["defaults"] = {
+        "max_timeout_seconds": 300,
+        "max_synchronous_timeout_seconds": 90,
+    }
+    config = HATSConfig.model_validate(payload)
+    target = config.targets["docker"]
+
+    assert config.resolved_max_timeout(target) == 300
+    assert config.resolved_max_synchronous_timeout(target) == 90
+
+
+def test_synchronous_timeout_cannot_exceed_execution_timeout() -> None:
+    payload = _config()
+    payload["defaults"] = {
+        "max_timeout_seconds": 120,
+        "max_synchronous_timeout_seconds": 121,
+    }
+    with pytest.raises(ValidationError, match="synchronous timeout"):
+        HATSConfig.model_validate(payload)
+
+
+def test_executor_socket_is_optional_and_private_local_path() -> None:
+    config = HATSConfig.model_validate(_config())
+    assert config.executor.socket_path is None
+    assert config.executor.max_concurrency == 2
+
+    payload = _config()
+    payload["executor"] = {
+        "socket_path": "/var/lib/hats/executor.sock",
+        "max_concurrency": 3,
+    }
+    config = HATSConfig.model_validate(payload)
+    assert config.executor.socket_path == "/var/lib/hats/executor.sock"
+    assert config.executor.max_concurrency == 3
+
+
+def test_executor_socket_must_be_absolute() -> None:
+    payload = _config()
+    payload["executor"] = {"socket_path": "relative/executor.sock"}
+    with pytest.raises(ValidationError, match="executor socket path must be absolute"):
+        HATSConfig.model_validate(payload)

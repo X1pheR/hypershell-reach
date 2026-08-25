@@ -36,7 +36,7 @@ Inputs:
 
 The server resolves the exact registered script, validates arguments, checks required target capabilities and sends the script content over SSH stdin. The target does not need a repository checkout. `purpose` is required and describes why the execution exists; it is not a place for script content, argument values, environment values or secrets.
 
-The script-owned `timeout_seconds` cannot exceed the configured target maximum. Scripts are never retried automatically.
+The script-owned `timeout_seconds` cannot exceed the configured target maximum. For synchronous `run_script`, it also cannot exceed the target's effective synchronous transport-safe maximum; longer managed work uses `start_script`. Scripts are never retried automatically.
 
 Arguments become deterministic `--kebab-name value` pairs in metadata order. `string_list` values repeat the same flag once per item, preserving list order. String values are shell-quoted by HATS before the remote interpreter is invoked. The caller cannot supply raw argv.
 
@@ -191,14 +191,26 @@ Links an approved or subsequently blocked Candidate to an existing HATS Task usi
 
 Transitions an approved Candidate to `implemented` or `automated` and requires a final `managed-tool` or `capability` reference. A `managed-tool` reference must resolve in the current effective ToolRegistry before state is committed.
 
-## Raw execution
+## Execution lifetime
 
-### `run_command`
+HATS intentionally exposes two execution lifetimes. `run_command`, `run_shell` and `run_script` are synchronous and may run only up to the target's effective `max_synchronous_timeout_seconds`. `start_command`, `start_shell` and `start_script` submit durable asynchronous work to the separately supervised executor and return a Run ID immediately; they may use the full effective `max_timeout_seconds`. The split is explicit rather than automatically changing a tool's return shape based on duration.
 
-Runs one non-interactive command on one configured target. `purpose` is required and must explain why the execution exists without copying command text, argument values, environment values or secrets into persisted state. The requested timeout cannot exceed the target maximum. Commands are never retried automatically.
+Accepted asynchronous work is owned by the executor, not by the requesting MCP connection. Use `get_run` or `list_runs` to poll `running` and terminal state. Polling reads state only and cannot duplicate execution. Caller disconnect is not cancellation.
 
-### `run_shell`
+### `run_command` / `start_command`
 
-Runs bounded `sh` or `bash` input over SSH stdin. `purpose` is required and must explain why the execution exists without copying command text, shell/script bodies, argument values, environment values or secrets into persisted state. Use this operation when a managed tool does not yet exist and the caller is authorized to use raw execution.
+Both execute one non-interactive command on one configured target. `purpose` is required and must explain why the execution exists without copying command text, argument values, environment values or secrets into persisted state. `run_command` returns the bounded execution result synchronously; `start_command` returns durable acceptance and a Run ID. Commands are never retried automatically.
 
-For all three execution tools, purpose is normalized by trimming outer whitespace and must then contain 1 to 512 printable characters on one line. Historical Run v1 records can still be returned by `list_runs` and `get_run`; they expose `purpose: null` and `result_summary: null`. New Run v2 records receive a server-generated result summary bounded to 512 characters. See [Runs and tasks](runs-and-tasks.md) for the persisted safety and compatibility contract.
+### `run_shell` / `start_shell`
+
+Both execute bounded `sh` or `bash` input over SSH stdin. `purpose` is required and must explain why the execution exists without copying command text, shell/script bodies, argument values, environment values or secrets into persisted state. Use raw shell execution only when a managed tool does not yet exist and the caller is authorized to use it.
+
+### `run_script` / `start_script`
+
+Both preserve the same registry-owned script content, typed arguments, capability checks, fixed script timeout, mutation classification, idempotency metadata, source ID and content hash. `start_script` changes execution lifetime only; it does not weaken the managed-tool contract.
+
+### `cancel_run`
+
+Cancels one running asynchronous Run through its owning executor and requires `confirm=true`. Cancellation is idempotent for an already terminal Run and never starts or retries execution. A normal MCP disconnect does not imply cancellation.
+
+For all six execution tools, purpose is normalized by trimming outer whitespace and must then contain 1 to 512 printable characters on one line. Historical Run v1 records can still be returned by `list_runs` and `get_run`; they expose `purpose: null` and `result_summary: null`. New Run v3 records add `execution_mode: sync|async` while preserving the bounded server-generated result summary introduced in v2. See [Runs and tasks](runs-and-tasks.md) for the persisted safety and compatibility contract.

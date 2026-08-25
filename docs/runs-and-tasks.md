@@ -4,14 +4,17 @@ Runs and tasks solve different problems.
 
 ## Runs
 
-A run is one technical execution attempt. HATS creates a run immediately before `run_command`, `run_shell` or `run_script` reaches the SSH execution boundary. New agent-initiated executions must provide a human-readable `purpose` that explains why the execution exists. Purpose is intentionally separate from the technical operation, target, managed-tool identity and execution result.
+A run is one technical execution attempt. Synchronous `run_command`, `run_shell` and `run_script` create a Run immediately before the SSH execution boundary. Asynchronous `start_command`, `start_shell` and `start_script` create the Run in the durable executor when submission is accepted. New agent-initiated executions must provide a human-readable `purpose` that explains why the execution exists. Purpose is intentionally separate from the technical operation, target, managed-tool identity and execution result.
 
 ```mermaid
 flowchart LR
-    Call[Execution call] --> Start[Persist running record]
+    Call[Execution call] --> Mode{sync or async}
+    Mode -->|sync| Start[Persist running Run]
+    Mode -->|async| Accept[Executor accepts and persists running Run]
     Start --> SSH[Bounded SSH execution]
-    SSH --> End[Persist outcome]
-    End --> Result[Return run_id and execution result]
+    Accept --> SSH
+    SSH --> End[Persist terminal outcome]
+    End --> Result[Read result through response or polling]
 ```
 
 Run records contain bounded execution metadata only. They never persist:
@@ -23,7 +26,7 @@ Run records contain bounded execution metadata only. They never persist:
 - stdout or stderr text;
 - target addresses, users or credential paths.
 
-A run can contain purpose, script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency, output byte/truncation counters and a bounded `result_summary`. Compact run listings expose purpose, result summary, `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because HATS cannot infer repeat safety from arbitrary caller input.
+A run can contain execution mode, purpose, script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency, output byte/truncation counters and a bounded `result_summary`. Compact run listings expose purpose, result summary, `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because HATS cannot infer repeat safety from arbitrary caller input.
 
 ### Purpose contract
 
@@ -39,7 +42,7 @@ A persisted result summary is one printable line with a hard maximum of 512 char
 
 ### Schema compatibility
 
-New Run writes use schema v2. The reader accepts both Run v1 and v2, so mixed historical/new stores require no bulk migration. Run v1 has no purpose or result summary; read APIs project those fields as `null` without rewriting the historical file. If an unrelated mutation such as a retention override rewrites a v1 record, it remains schema v1 and the new fields are still omitted.
+New Run writes use schema v3. The reader accepts Run v1, v2 and v3, so existing stores require no bulk migration for forward operation. Run v1 has no purpose or result summary; Run v1 and v2 have no persisted `execution_mode` and are projected as `sync`. Historical records are not implicitly rewritten. Schema v3 is intentionally explicit because executor ownership is durable state, not an in-memory transport detail.
 
 ### States
 
@@ -60,13 +63,16 @@ Raw `run_command` and `run_shell` are treated as potentially mutating because HA
 
 ### Recovery
 
-On startup, HATS changes stale `running` records to `interrupted`. This records local interruption; it does not claim the remote system rolled back or completed.
+Recovery is ownership-specific. The MCP runtime reconciles only stale synchronous `running` records as `interrupted` with `ServerRestart`; the separately supervised executor reconciles only stale asynchronous `running` records with `ExecutorRestart`. Starting or reconnecting one runtime cannot interrupt work owned by the other. This records local interruption only; it does not claim the remote system rolled back or completed.
 
 ### Run tools
 
 - `list_runs` returns bounded summaries and can filter by state or task ID.
 - `get_run` returns one complete metadata record.
 - `set_run_retained` sets a local retention override without executing anything remotely.
+- `cancel_run` explicitly cancels one running async Run through the executor and requires confirmation.
+
+Run mutations from the MCP and executor processes are serialized through one fixed advisory write lock in the Run root. Writes remain atomic replacements; the fixed lock prevents cross-process lost updates without introducing a database or an unbounded lockfile set.
 
 ## Tasks
 

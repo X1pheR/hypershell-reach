@@ -8,6 +8,7 @@ HATS reads YAML from the path in `HATS_CONFIG`. Configuration is deployment-owne
 schema_version: 1
 workspace: {}
 defaults: {}
+executor: {}
 sources: {}
 targets: {}
 ```
@@ -45,10 +46,26 @@ retention:
 defaults:
   connect_timeout_seconds: 10
   max_timeout_seconds: 300
+  max_synchronous_timeout_seconds: 90
   max_output_bytes: 262144
 ```
 
-Targets may override these limits within the schema bounds.
+`max_timeout_seconds` is the execution capability limit. `max_synchronous_timeout_seconds` is a separate transport-delivery contract: synchronous `run_*` calls above that value are rejected before SSH and must use the corresponding `start_*` operation. This prevents a deployment from advertising synchronous execution durations that its primary MCP transport cannot reliably return. Omitting the synchronous limit preserves the historical behavior by resolving it to `max_timeout_seconds`.
+
+Targets may override these limits within the schema bounds. An effective synchronous limit may not exceed the effective execution limit.
+
+## Durable executor
+
+```yaml
+executor:
+  socket_path: /run/hats/executor.sock
+  max_concurrency: 2
+  submission_timeout_seconds: 5
+```
+
+The executor is optional. When configured and separately supervised through the installed `hats-executor` runtime, `start_command`, `start_shell` and `start_script` submit work over a private Unix socket and return a durable Run ID quickly. The executor owns accepted asynchronous work independently of the MCP request or STDIO child lifetime. `socket_path` must be an absolute private local path shared only by the HATS MCP runtime and executor; HATS creates the socket with mode `0600`. No TCP listener is added.
+
+`max_concurrency` bounds simultaneous asynchronous SSH executions. `submission_timeout_seconds` bounds only local submission/cancellation communication with the executor; it does not change remote execution timeouts.
 
 ## Managed tool sources
 
@@ -103,7 +120,7 @@ targets:
       known_hosts_file: /run/secrets/hats/known_hosts
 ```
 
-Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns IDs, display names, capabilities and effective limits. It never returns host addresses, usernames or credential paths.
+Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns IDs, display names, capabilities, the effective execution timeout and the effective synchronous transport-safe timeout. It never returns host addresses, usernames or credential paths.
 
 `capabilities` are compatibility tags. They are not an authorization system.
 

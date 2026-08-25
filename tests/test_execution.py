@@ -81,3 +81,76 @@ async def test_bounded_reader_reports_truncation() -> None:
 )
 def test_status_classification(timed_out: bool, exit_code: int | None, expected: str) -> None:
     assert classify_status(timed_out=timed_out, exit_code=exit_code) == expected
+
+
+@pytest.mark.asyncio
+async def test_cancellation_kills_ssh_process_group(tmp_path, monkeypatch) -> None:
+    identity = tmp_path / "id_ed25519"
+    known_hosts = tmp_path / "known_hosts"
+    identity.write_text("test", encoding="utf-8")
+    known_hosts.write_text("test", encoding="utf-8")
+    target = Target.model_validate(
+        {
+            "display_name": "Example",
+            "capabilities": ["linux"],
+            "ssh": {
+                "host": "203.0.113.10",
+                "user": "operator",
+                "identity_file": str(identity),
+                "known_hosts_file": str(known_hosts),
+            },
+        }
+    )
+
+    class FakeProcess:
+        pid = 4242
+        returncode = None
+        stdin = None
+
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self._done = asyncio.Event()
+
+        async def wait(self):
+            await self._done.wait()
+            return self.returncode
+
+        def killed(self) -> None:
+            self.returncode = -9
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._done.set()
+
+    process = FakeProcess()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return process
+
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_killpg(pid: int, sig: int) -> None:
+        kill_calls.append((pid, sig))
+        process.killed()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("hats_mcp.execution.os.killpg", fake_killpg)
+
+    task = asyncio.create_task(
+        __import__("hats_mcp.execution", fromlist=["run_ssh"]).run_ssh(
+            target_id="example",
+            target=target,
+            remote_command="sleep 300",
+            timeout_seconds=300,
+            connect_timeout_seconds=10,
+            max_output_bytes=1024,
+        )
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert kill_calls == [(4242, __import__("signal").SIGKILL)]
+    assert process.returncode == -9

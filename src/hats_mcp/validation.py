@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,10 +96,45 @@ def _target_lines(config: HATSConfig) -> tuple[list[str], int]:
                 f"    Host: {target.ssh.host}",
                 f"    User: {target.ssh.user}",
                 f"    Capabilities: {', '.join(target.capabilities) if target.capabilities else 'none'}",
+                f"    Execution timeout: {config.resolved_max_timeout(target)}s",
+                f"    Synchronous timeout: {config.resolved_max_synchronous_timeout(target)}s",
             ]
         )
     return lines, 0
 
+
+
+def _executor_lines(config: HATSConfig) -> tuple[list[str], int]:
+    socket_value = config.executor.socket_path
+    if socket_value is None:
+        return ["Async executor", "  Status: not configured"], 0
+
+    socket_path = Path(socket_value)
+    errors = 0
+    try:
+        mode = socket_path.lstat().st_mode
+    except FileNotFoundError:
+        mode = None
+
+    if mode is not None and not stat.S_ISSOCK(mode):
+        errors += 1
+        socket_state = "invalid; existing path is not a Unix socket"
+    elif mode is not None:
+        socket_state = "present Unix socket"
+    else:
+        parent_ok, parent_state = _workspace_state(socket_path.parent)
+        if not parent_ok:
+            errors += 1
+        socket_state = f"not present; parent {parent_state}"
+
+    return [
+        "Async executor",
+        f"  Status: {'ready' if errors == 0 else 'invalid'}",
+        f"  Socket: {socket_path}",
+        f"  Socket state: {socket_state}",
+        f"  Max concurrency: {config.executor.max_concurrency}",
+        f"  Submission timeout: {config.executor.submission_timeout_seconds}s",
+    ], errors
 
 def _tool_source_lines(config: HATSConfig) -> tuple[list[str], int]:
     enabled = [source for source in config.sources.tools if source.enabled]
@@ -326,6 +362,7 @@ def validate_configuration(path: str | Path | None = None) -> ValidationReport:
     error_count = 0
     for builder in (
         _workspace_lines,
+        _executor_lines,
         _target_lines,
         _tool_source_lines,
         _skill_source_lines,

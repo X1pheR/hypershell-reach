@@ -18,6 +18,7 @@ class Defaults(BaseModel):
 
     connect_timeout_seconds: int = Field(default=10, ge=1, le=60)
     max_timeout_seconds: int = Field(default=300, ge=1, le=900)
+    max_synchronous_timeout_seconds: int | None = Field(default=None, ge=1, le=900)
     max_output_bytes: int = Field(default=262_144, ge=1_024, le=1_048_576)
 
 
@@ -35,6 +36,21 @@ class Workspace(BaseModel):
     def require_absolute_paths(cls, value: str | None) -> str | None:
         if value is not None and not Path(value).is_absolute():
             raise ValueError("workspace paths must be absolute")
+        return value
+
+
+class ExecutorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    socket_path: str | None = None
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    submission_timeout_seconds: int = Field(default=5, ge=1, le=30)
+
+    @field_validator("socket_path")
+    @classmethod
+    def require_absolute_socket_path(cls, value: str | None) -> str | None:
+        if value is not None and not Path(value).is_absolute():
+            raise ValueError("executor socket path must be absolute")
         return value
 
 
@@ -210,6 +226,7 @@ class Target(BaseModel):
     enabled: bool = True
     connect_timeout_seconds: int | None = Field(default=None, ge=1, le=60)
     max_timeout_seconds: int | None = Field(default=None, ge=1, le=900)
+    max_synchronous_timeout_seconds: int | None = Field(default=None, ge=1, le=900)
     max_output_bytes: int | None = Field(default=None, ge=1_024, le=1_048_576)
     ssh: SSHConfig
 
@@ -235,6 +252,7 @@ class HATSConfig(BaseModel):
     schema_version: Literal[1]
     workspace: Workspace
     defaults: Defaults = Field(default_factory=Defaults)
+    executor: ExecutorConfig = Field(default_factory=ExecutorConfig)
     retention: Retention = Field(default_factory=Retention)
     sources: Sources = Field(default_factory=Sources)
     targets: dict[str, Target]
@@ -259,6 +277,16 @@ class HATSConfig(BaseModel):
             raise ValueError(
                 f"unknown Hermes skill-state targets: {', '.join(unknown_state_targets)}"
             )
+        if (
+            self.defaults.max_synchronous_timeout_seconds is not None
+            and self.defaults.max_synchronous_timeout_seconds > self.defaults.max_timeout_seconds
+        ):
+            raise ValueError("default synchronous timeout cannot exceed the execution timeout")
+        for target_id, target in self.targets.items():
+            if self.resolved_max_synchronous_timeout(target) > self.resolved_max_timeout(target):
+                raise ValueError(
+                    f"target {target_id} synchronous timeout cannot exceed the execution timeout"
+                )
         return self
 
     def enabled_target(self, target_id: str) -> Target:
@@ -274,6 +302,13 @@ class HATSConfig(BaseModel):
 
     def resolved_max_timeout(self, target: Target) -> int:
         return target.max_timeout_seconds or self.defaults.max_timeout_seconds
+
+    def resolved_max_synchronous_timeout(self, target: Target) -> int:
+        return (
+            target.max_synchronous_timeout_seconds
+            or self.defaults.max_synchronous_timeout_seconds
+            or self.resolved_max_timeout(target)
+        )
 
     def resolved_max_output(self, target: Target) -> int:
         return target.max_output_bytes or self.defaults.max_output_bytes

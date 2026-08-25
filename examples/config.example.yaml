@@ -15,7 +15,13 @@ retention:
 defaults:
   connect_timeout_seconds: 10
   max_timeout_seconds: 300
+  max_synchronous_timeout_seconds: 90
   max_output_bytes: 262144
+
+executor:
+  socket_path: /run/hats/executor.sock
+  max_concurrency: 2
+  submission_timeout_seconds: 5
 
 sources:
   tools:

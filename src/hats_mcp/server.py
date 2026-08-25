@@ -21,6 +21,7 @@ from .candidates import (
 )
 from .config import HATSConfig, load_config
 from .execution import run_ssh
+from .executor import ExecutionSubmission, cancel_execution, submit_execution
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .skills import (
     HermesState,
@@ -153,6 +154,13 @@ class RetainRunInput(BaseModel):
 
     run_id: str = Field(min_length=1, max_length=128)
     retained: bool
+
+
+class CancelRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=128)
+    confirm: bool = False
 
 
 class ListTasksInput(BaseModel):
@@ -303,13 +311,25 @@ class CompleteCandidateInput(BaseModel):
     final_reference: CandidateReference
 
 
-def _target_runtime(target_id: str, requested_timeout: int) -> tuple[Any, int, int]:
+def _target_runtime(
+    target_id: str,
+    requested_timeout: int,
+    *,
+    synchronous: bool = True,
+) -> tuple[Any, int, int]:
     target = _config.enabled_target(target_id)
     max_timeout = _config.resolved_max_timeout(target)
     if requested_timeout > max_timeout:
         raise ValueError(
             f"timeout_seconds exceeds configured maximum for {target_id}: {max_timeout}"
         )
+    if synchronous:
+        max_synchronous = _config.resolved_max_synchronous_timeout(target)
+        if requested_timeout > max_synchronous:
+            raise ValueError(
+                f"timeout_seconds exceeds configured synchronous maximum for {target_id}: "
+                f"{max_synchronous}; use start_command/start_shell/start_script for longer work"
+            )
     return (
         target,
         _config.resolved_connect_timeout(target),
@@ -327,6 +347,7 @@ def _run_store() -> RunStore:
         _run_store_instance = RunStore(
             _config.workspace.runs,
             completed_days=_config.retention.runs.completed_days,
+            reconcile_modes={"sync"},
         )
         _run_store_instance.cleanup()
     return _run_store_instance
@@ -845,6 +866,40 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="start_script",
+            description=(
+                "Submit one registered managed script for durable asynchronous execution and return "
+                "a Run ID immediately. The managed-tool registry still owns script content, typed "
+                "arguments, target capabilities, timeout, mutation and idempotency metadata. The "
+                "executor owns accepted work independently of the MCP request; use get_run/list_runs "
+                "to poll terminal state. purpose must explain why the execution exists and remain "
+                "secret-free, one printable line of at most 512 characters."
+            ),
+            inputSchema=RunScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="cancel_run",
+            description=(
+                "Explicitly cancel one running asynchronous HATS Run owned by the executor. "
+                "Requires confirm=true. Caller or MCP transport disconnection never implies "
+                "cancellation; repeated cancellation of an already terminal Run is safe and does "
+                "not execute work again."
+            ),
+            inputSchema=CancelRunInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
             name="run_command",
             description=(
                 "Run one non-interactive command on a configured target. purpose must explain "
@@ -855,6 +910,42 @@ async def list_tools() -> list[types.Tool]:
                 "Commands are never retried automatically."
             ),
             inputSchema=CommandInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="start_command",
+            description=(
+                "Submit one non-interactive command for durable asynchronous execution on a configured "
+                "target and return a Run ID immediately. The executor owns accepted work independently "
+                "of the MCP request; use get_run/list_runs to poll terminal state. purpose must explain "
+                "why the execution exists and remain secret-free, one printable line of at most 512 "
+                "characters. Use this when the requested "
+                "execution can outlive the configured synchronous transport-safe ceiling."
+            ),
+            inputSchema=CommandInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="start_shell",
+            description=(
+                "Submit bounded sh or bash input for durable asynchronous execution and return a Run "
+                "ID immediately. The executor owns accepted work independently of the MCP request; "
+                "use get_run/list_runs to poll terminal state. purpose must explain why the execution "
+                "exists and remain secret-free, one printable line of at most 512 characters. Use this "
+                "when shell work can outlive the configured synchronous "
+                "transport-safe ceiling."
+            ),
+            inputSchema=ShellInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=True,
@@ -1044,6 +1135,7 @@ async def call_tool(
                         "capabilities": target.capabilities,
                         "enabled": target.enabled,
                         "max_timeout_seconds": _config.resolved_max_timeout(target),
+                        "max_synchronous_timeout_seconds": _config.resolved_max_synchronous_timeout(target),
                         "max_output_bytes": _config.resolved_max_output(target),
                     }
                     for target_id, target in sorted(_config.targets.items())
@@ -1167,6 +1259,55 @@ async def call_tool(
                 "idempotent": script.metadata.idempotent,
                 "execution": execution,
             }
+        elif name == "start_script":
+            args = RunScriptInput(**arguments)
+            script = _tool_registry().get(args.script_id)
+            target, _, _ = _target_runtime(
+                args.target, script.metadata.timeout_seconds, synchronous=False
+            )
+            ensure_target_compatible(script, target.capabilities)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await submit_execution(
+                _config,
+                ExecutionSubmission(
+                    operation="run_script",
+                    target=args.target,
+                    remote_command=build_script_command(script, args.arguments),
+                    stdin_text=script.content,
+                    timeout_seconds=script.metadata.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=script.metadata.mutating,
+                    idempotent=script.metadata.idempotent,
+                    task_id=args.task_id,
+                    script_id=script.metadata.id,
+                    script_source=script.source_id,
+                    script_sha256=script.sha256,
+                    argument_names=list(args.arguments),
+                ),
+            )
+        elif name == "cancel_run":
+            args = CancelRunInput(**arguments)
+            if not args.confirm:
+                raise ValueError("cancel_run requires confirm=true")
+            result = await cancel_execution(_config, args.run_id)
+        elif name == "start_command":
+            args = CommandInput(**arguments)
+            _target_runtime(args.target, args.timeout_seconds, synchronous=False)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await submit_execution(
+                _config,
+                ExecutionSubmission(
+                    operation="run_command",
+                    target=args.target,
+                    remote_command=args.command,
+                    timeout_seconds=args.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=True,
+                    task_id=args.task_id,
+                ),
+            )
         elif name == "run_command":
             args = CommandInput(**arguments)
             target, connect_timeout, max_output = _target_runtime(
@@ -1185,6 +1326,24 @@ async def call_tool(
                 task_id=args.task_id,
             )
             result = {"run_id": run_id, "execution": execution}
+        elif name == "start_shell":
+            args = ShellInput(**arguments)
+            _target_runtime(args.target, args.timeout_seconds, synchronous=False)
+            if args.task_id is not None:
+                _task_store().require_open(args.task_id)
+            result = await submit_execution(
+                _config,
+                ExecutionSubmission(
+                    operation="run_shell",
+                    target=args.target,
+                    remote_command=f"{args.interpreter} -s --",
+                    stdin_text=args.script,
+                    timeout_seconds=args.timeout_seconds,
+                    purpose=args.purpose,
+                    may_mutate=True,
+                    task_id=args.task_id,
+                ),
+            )
         elif name == "run_shell":
             args = ShellInput(**arguments)
             target, connect_timeout, max_output = _target_runtime(
@@ -1236,6 +1395,7 @@ async def run_stdio() -> None:
     _run_store_instance = RunStore(
         _config.workspace.runs,
         completed_days=_config.retention.runs.completed_days,
+        reconcile_modes={"sync"},
     )
     _run_store_instance.cleanup()
     _task_store_instance = TaskStore(

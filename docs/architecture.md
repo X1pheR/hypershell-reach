@@ -8,17 +8,21 @@ HATS is a modular MCP service for reusable homelab agent capabilities. It keeps 
 flowchart LR
     Client[MCP client] --> Server[HATS MCP server]
     Config[YAML configuration] --> Server
+    Config --> Executor[HATS executor]
     Server --> Targets[Target registry]
     Server --> Tools[Managed tool registry]
+    Server -->|private Unix socket| Executor
     Targets --> SSH[SSH execution]
     Tools --> SSH
+    Executor --> SSH
     Server --> Runs[Run state]
+    Executor --> Runs
     Server --> Tasks[Task state]
     Server --> Skills[Skill sources]
     Server --> Registry[Optional tooling registry]
 ```
 
-One process owns configuration, target lookup, tool discovery and local state. HATS does not require a separate controller, database server or worker service.
+HATS remains a small product with filesystem-backed state and no external queue or database. The MCP runtime owns discovery, synchronous calls and client-facing state operations. When durable asynchronous execution is configured, one separately supervised `hats-executor` process owns accepted async SSH work through a private Unix socket. This separation is required so accepted work can outlive an MCP STDIO child or gateway request without introducing a general-purpose orchestration platform.
 
 ## Modules
 
@@ -27,6 +31,7 @@ One process owns configuration, target lookup, tool discovery and local state. H
 | Configuration | Validate deployment-specific targets, source roots and workspace paths. |
 | Targets | Return safe target metadata and resolve one configured execution target. |
 | SSH execution | Run bounded non-interactive commands or interpreter input on configured targets. |
+| Durable executor | Own accepted asynchronous Runs independently of MCP request lifetime with bounded local submission and concurrency. |
 | Managed tools | Discover approved metadata and execute only registered script IDs. |
 | Runs | Record agent purpose, bounded technical result context and ambiguous/interrupted execution outcomes without persisting raw execution content. |
 | Tasks | Keep durable continuity only for work that needs recovery or handoff. |
@@ -87,19 +92,20 @@ HATS consumes configured filesystem sources. It does not own their Git, rsync or
 HATS includes an optional Web UI in the same product repository and release rather than as a separate product. The MCP and UI are separate runtime roles:
 
 ```text
-hats-mcp   # STDIO MCP entrypoint, for example as an MCP gateway child
-hats-ui    # optional HTTP entrypoint in a separate long-running container/process
+hats-mcp       # STDIO MCP entrypoint, for example as an MCP gateway child
+hats-executor  # optional separately supervised durable async execution runtime
+hats-ui        # optional HTTP entrypoint in a separate long-running container/process
 ```
 
 The UI is read-only and reuses the HATS domain models and configured state through explicit read-only store access. It does not reconcile Runs, perform retention cleanup, mutate Tasks or project remote Hermes state. Its browser surface combines operational views with a user guide and curated technical documentation rendered from the repository Markdown packaged in the same release. Tooling candidates are presented inside the Tooling product area rather than as a separate primary destination.
 
-Do not run a long-lived HTTP listener as an incidental child of a STDIO gateway process. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
+Do not run the long-lived executor or HTTP listener as an incidental child of a STDIO gateway request lifecycle. The executor must be supervised independently of `hats-mcp`. If browser mutations are added later, establish one explicit writer/service boundary instead of letting independent MCP and UI processes mutate the same file-backed state concurrently.
 
 ## Execution boundary
 
 The caller selects a configured target. Target configuration owns host, port, user, identity, known-hosts file and execution limits.
 
-SSH execution is non-interactive and uses strict host-key checking, key-only authentication, no PTY, no forwarding, bounded output, bounded timeout and no automatic retry.
+SSH execution is non-interactive and uses strict host-key checking, key-only authentication, no PTY, no forwarding, bounded output, bounded timeout and no automatic retry. Synchronous tools are additionally bounded by a deployment-configured transport-safe ceiling. Work above that ceiling uses explicit `start_*` submission and durable Run polling rather than extending an upstream MCP request lifetime.
 
 A failed or interrupted mutation can leave remote state ambiguous. HATS must report that ambiguity; it must not claim rollback or safe retry without evidence. Persisted Run purpose explains why an agent execution exists, while the server-generated result summary provides only bounded allowlisted result metadata. Neither field weakens the existing ban on persisting raw command/script content, argument or environment values, or stdout/stderr text.
 

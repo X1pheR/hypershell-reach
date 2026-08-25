@@ -28,6 +28,7 @@ dev = [
 [project.scripts]
 hats-mcp = "hats_mcp:main"
 hats-ui = "hats_mcp.ui:main"
+hats-executor = "hats_mcp.executor:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hats_mcp"]
