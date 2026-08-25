@@ -21,3 +21,10 @@ def test_dockerfile_sets_reach_oci_identity() -> None:
 def test_unified_reach_image_installs_ssh_client() -> None:
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "openssh-client" in dockerfile
+
+
+def test_unified_reach_image_has_non_root_service_identity() -> None:
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "groupadd --gid 2000 reach" in dockerfile
+    assert "useradd --uid 1000 --gid 2000" in dockerfile
+    assert "USER 1000:2000" in dockerfile
