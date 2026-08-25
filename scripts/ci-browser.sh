@@ -194,6 +194,16 @@ targets:
       known_hosts_file: /run/secrets/unused_known_hosts
 YAML
 
+# Fixture files come from the runner UID, while Reach runs as UID 1000.
+# Make read-only fixture content portable and only the ephemeral state roots writable.
+chmod -R a+rX "${FIXTURE_ROOT}"
+chmod -R a+rwX \
+  "${FIXTURE_ROOT}/tmp" \
+  "${FIXTURE_ROOT}/runs" \
+  "${FIXTURE_ROOT}/tasks" \
+  "${FIXTURE_ROOT}/trash" \
+  "${FIXTURE_ROOT}/candidates"
+
 app_created=0
 playwright_created=0
 network_created=0
