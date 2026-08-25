@@ -88,3 +88,13 @@ def test_browser_results_are_isolated_per_run() -> None:
 def test_browser_runtime_uses_release_tag_not_digest() -> None:
     assert 'PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python:v1.62.0-noble"' in BROWSER
     assert 'playwright/python@sha256:' not in BROWSER
+
+
+def test_browser_fixture_is_portable_to_non_root_reach_user() -> None:
+    assert 'chmod -R a+rX "${FIXTURE_ROOT}"' in BROWSER
+    assert '"${FIXTURE_ROOT}/tmp"' in BROWSER
+    assert '"${FIXTURE_ROOT}/runs"' in BROWSER
+    assert '"${FIXTURE_ROOT}/tasks"' in BROWSER
+    assert '"${FIXTURE_ROOT}/trash"' in BROWSER
+    assert '"${FIXTURE_ROOT}/candidates"' in BROWSER
+    assert 'chmod -R a+rwX' in BROWSER
