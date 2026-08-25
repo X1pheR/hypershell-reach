@@ -37,7 +37,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           uv build --out-dir dist
           sha256sum dist/*.whl dist/*.tar.gz | sed 's#  dist/#  #' > SHA256SUMS
       - name: Build and publish versioned container image
@@ -57,14 +58,14 @@ jobs:
             --tag "${image}" \
             .
           push_output="$(docker push "${image}" 2>&1)"
-          printf '%s
-' "${push_output}"
-          digest="$(printf '%s\n' "${push_output}" | awk '/digest: sha256:/ {print $3}' | tail -n 1)"
+          echo "${push_output}"
+          digest="$(awk '/digest: sha256:/ {print $3}' <<<"${push_output}" | tail -n 1)"
           test -n "${digest}"
-          printf 'image: %s
-digest: %s
-revision: %s
-' "${image}" "${digest}" "${GITHUB_SHA}" > IMAGE.txt
+          cat > IMAGE.txt <<EOF
+          image: ${image}
+          digest: ${digest}
+          revision: ${GITHUB_SHA}
+          EOF
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
