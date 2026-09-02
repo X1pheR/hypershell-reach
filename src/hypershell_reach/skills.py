@@ -280,15 +280,27 @@ def _iter_skill_files(
     return sorted(matches)
 
 
-def _validated_source_root(source: SkillSource) -> Path:
-    root = Path(source.path)
+def _validated_root(path_value: str, *, source_id: str) -> Path:
+    root = Path(path_value)
     if not root.exists():
-        raise ValueError(f"skill source does not exist: {source.id}")
+        raise ValueError(f"skill source does not exist: {source_id}: {path_value}")
     if not root.is_dir():
-        raise ValueError(f"skill source is not a directory: {source.id}")
+        raise ValueError(f"skill source is not a directory: {source_id}: {path_value}")
     if root.is_symlink():
-        raise ValueError(f"skill source root must not be a symlink: {source.id}")
+        raise ValueError(f"skill source root must not be a symlink: {source_id}: {path_value}")
     return root.resolve()
+
+
+def _validated_source_roots(source: SkillSource) -> list[Path]:
+    roots = [_validated_root(source.path, source_id=source.id)]
+    roots.extend(_validated_root(value, source_id=source.id) for value in source.additional_paths)
+    if len(set(roots)) != len(roots):
+        raise ValueError(f"duplicate resolved skill source roots: {source.id}")
+    return roots
+
+
+def _validated_source_root(source: SkillSource) -> Path:
+    return _validated_source_roots(source)[0]
 
 
 def skill_sources_config_signature(sources: list[SkillSource]) -> str:
@@ -364,63 +376,67 @@ def skill_sources_snapshot(sources: list[SkillSource]) -> SkillSourcesSnapshot:
     for source in sources:
         if not source.enabled:
             continue
-        root = _validated_source_root(source)
-        source_probe_entries: dict[Path, SkillSourceProbeEntry] = {
-            root: _probe_entry(root)
-        }
-        skill_files = _iter_skill_files(
-            root,
-            hermes=source.type == "hermes",
-            probe_entries=source_probe_entries,
-        )
-        paths = _iter_package_files(
-            root,
-            [path.parent for path in skill_files],
-            probe_entries=source_probe_entries,
-        )
-        if source.type == "hermes":
-            for relative in (".hub", "_org"):
-                directory = root / relative
-                if directory.is_dir() and not directory.is_symlink():
-                    source_probe_entries.setdefault(directory, _probe_entry(directory))
-            by_relative = {path.relative_to(root).as_posix(): path for path in paths}
-            for relative in _HERMES_FRESHNESS_METADATA:
-                path = root.joinpath(*PurePosixPath(relative).parts)
-                if path.is_symlink() or not path.is_file():
-                    continue
-                by_relative.setdefault(relative, path)
-            paths = [by_relative[relative] for relative in sorted(by_relative)]
+        for root_index, root in enumerate(_validated_source_roots(source)):
+            source_probe_entries: dict[Path, SkillSourceProbeEntry] = {
+                root: _probe_entry(root)
+            }
+            skill_files = _iter_skill_files(
+                root,
+                hermes=source.type == "hermes",
+                probe_entries=source_probe_entries,
+            )
+            paths = _iter_package_files(
+                root,
+                [path.parent for path in skill_files],
+                probe_entries=source_probe_entries,
+            )
+            if source.type == "hermes":
+                for relative in (".hub", "_org"):
+                    directory = root / relative
+                    if directory.is_dir() and not directory.is_symlink():
+                        source_probe_entries.setdefault(directory, _probe_entry(directory))
+                by_relative = {path.relative_to(root).as_posix(): path for path in paths}
+                for relative in _HERMES_FRESHNESS_METADATA:
+                    path = root.joinpath(*PurePosixPath(relative).parts)
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    by_relative.setdefault(relative, path)
+                paths = [by_relative[relative] for relative in sorted(by_relative)]
 
-        source_header = {"id": source.id, "type": source.type}
-        digest.update(
-            json.dumps(source_header, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            + b"\n"
-        )
-        for path in paths:
-            file_count += 1
-            if file_count > MAX_FRESHNESS_FILES:
-                raise RuntimeError(
-                    f"skill freshness probe exceeds {MAX_FRESHNESS_FILES} files"
-                )
-            before = _probe_entry(path)
-            source_probe_entries.setdefault(path, before)
-            byte_count += before.size
-            if byte_count > MAX_FRESHNESS_BYTES:
-                raise RuntimeError(
-                    f"skill freshness probe exceeds {MAX_FRESHNESS_BYTES} bytes"
-                )
-            sha256 = _hash_regular_file(path, before)
-            entry = {
-                "path": path.relative_to(root).as_posix(),
-                "bytes": before.size,
-                "sha256": sha256,
+            source_header = {
+                "id": source.id,
+                "type": source.type,
+                "content_root": root_index,
             }
             digest.update(
-                json.dumps(entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                json.dumps(source_header, sort_keys=True, separators=(",", ":")).encode("utf-8")
                 + b"\n"
             )
-        for path, entry in source_probe_entries.items():
-            observed_probe_entries.setdefault(path, entry)
+            for path in paths:
+                file_count += 1
+                if file_count > MAX_FRESHNESS_FILES:
+                    raise RuntimeError(
+                        f"skill freshness probe exceeds {MAX_FRESHNESS_FILES} files"
+                    )
+                before = _probe_entry(path)
+                source_probe_entries.setdefault(path, before)
+                byte_count += before.size
+                if byte_count > MAX_FRESHNESS_BYTES:
+                    raise RuntimeError(
+                        f"skill freshness probe exceeds {MAX_FRESHNESS_BYTES} bytes"
+                    )
+                sha256 = _hash_regular_file(path, before)
+                entry = {
+                    "path": path.relative_to(root).as_posix(),
+                    "bytes": before.size,
+                    "sha256": sha256,
+                }
+                digest.update(
+                    json.dumps(entry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                    + b"\n"
+                )
+            for path, entry in source_probe_entries.items():
+                observed_probe_entries.setdefault(path, entry)
 
     if len(observed_probe_entries) > MAX_FRESHNESS_PROBE_PATHS:
         raise RuntimeError(
@@ -513,84 +529,90 @@ def _scan_source(
     *,
     allow_unresolved_hermes: bool = False,
 ) -> tuple[list[SkillPackage], dict[str, object]]:
-    root = _validated_source_root(source)
-
-    bundled = _read_bundled_names(root) if source.type == "hermes" else set()
-    hub = _read_hub_metadata(root) if source.type == "hermes" else {}
+    roots = _validated_source_roots(source)
     packages: list[SkillPackage] = []
     names: dict[str, str] = {}
 
-    for skill_md in _iter_skill_files(root, hermes=source.type == "hermes"):
-        size = skill_md.stat().st_size
-        if size > MAX_SKILL_FILE_BYTES:
-            raise ValueError(f"SKILL.md exceeds {MAX_SKILL_FILE_BYTES} bytes: {skill_md}")
-        content = skill_md.read_text(encoding="utf-8-sig", errors="replace")
-        frontmatter, body = _parse_frontmatter(content)
-        raw_name = frontmatter.get("name")
-        name = str(raw_name).strip() if raw_name is not None else skill_md.parent.name
-        if not _SKILL_NAME_RE.fullmatch(name):
-            raise ValueError(f"invalid skill name in {skill_md}: {name!r}")
-        if name in names:
-            raise ValueError(
-                f"duplicate skill name in source {source.id}: {name} -> {names[name]}, "
-                f"{skill_md.relative_to(root).as_posix()}"
-            )
-        names[name] = skill_md.relative_to(root).as_posix()
+    for root_index, root in enumerate(roots):
+        bundled = _read_bundled_names(root) if source.type == "hermes" else set()
+        hub = _read_hub_metadata(root) if source.type == "hermes" else {}
+        root_names: dict[str, str] = {}
+        for skill_md in _iter_skill_files(root, hermes=source.type == "hermes"):
+            size = skill_md.stat().st_size
+            if size > MAX_SKILL_FILE_BYTES:
+                raise ValueError(f"SKILL.md exceeds {MAX_SKILL_FILE_BYTES} bytes: {skill_md}")
+            content = skill_md.read_text(encoding="utf-8-sig", errors="replace")
+            frontmatter, body = _parse_frontmatter(content)
+            raw_name = frontmatter.get("name")
+            name = str(raw_name).strip() if raw_name is not None else skill_md.parent.name
+            if not _SKILL_NAME_RE.fullmatch(name):
+                raise ValueError(f"invalid skill name in {skill_md}: {name!r}")
+            relative_skill = skill_md.relative_to(root).as_posix()
+            if name in root_names:
+                raise ValueError(
+                    f"duplicate skill name in source {source.id}: {name} -> "
+                    f"{root_names[name]}, {relative_skill}"
+                )
+            root_names[name] = relative_skill
+            if name in names:
+                continue
+            names[name] = f"{root_index}:{relative_skill}"
 
-        description = _description(frontmatter, body)
-        if not description:
-            raise ValueError(f"skill has no description: {skill_md}")
+            description = _description(frontmatter, body)
+            if not description:
+                raise ValueError(f"skill has no description: {skill_md}")
 
-        compatible = _platform_matches(frontmatter, source.os_platform)
-        environment_relevant = _environment_matches(frontmatter, source.active_environments)
-        if source.type == "hermes":
-            if state is None:
-                if not allow_unresolved_hermes:
-                    raise RuntimeError(f"Hermes state is unavailable for source: {source.id}")
-                enabled = True
-                effective = False
+            compatible = _platform_matches(frontmatter, source.os_platform)
+            environment_relevant = _environment_matches(frontmatter, source.active_environments)
+            if source.type == "hermes":
+                if state is None:
+                    if not allow_unresolved_hermes:
+                        raise RuntimeError(f"Hermes state is unavailable for source: {source.id}")
+                    enabled = True
+                    effective = False
+                else:
+                    enabled = name not in state.disabled
+                    effective = name in state.effective_names
             else:
-                enabled = name not in state.disabled
-                effective = name in state.effective_names
-        else:
-            enabled = True
-            effective = compatible and environment_relevant
+                enabled = True
+                effective = compatible and environment_relevant
 
-        provenance, provenance_details = _provenance(
-            source=source,
-            root=root,
-            skill_dir=skill_md.parent,
-            name=name,
-            bundled=bundled,
-            hub=hub,
-        )
-        packages.append(
-            SkillPackage(
-                source_id=source.id,
-                source_type=source.type,
+            provenance, provenance_details = _provenance(
+                source=source,
                 root=root,
                 skill_dir=skill_md.parent,
-                relative_dir=skill_md.parent.relative_to(root).as_posix(),
                 name=name,
-                description=description,
-                category=_category(root, skill_md.parent),
-                frontmatter=frontmatter,
-                provenance=provenance,
-                provenance_details=provenance_details,
-                effective=effective,
-                compatible=compatible,
-                environment_relevant=environment_relevant,
-                enabled=enabled,
-                bytes=size,
-                sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                bundled=bundled,
+                hub=hub,
             )
-        )
+            packages.append(
+                SkillPackage(
+                    source_id=source.id,
+                    source_type=source.type,
+                    root=root,
+                    skill_dir=skill_md.parent,
+                    relative_dir=skill_md.parent.relative_to(root).as_posix(),
+                    name=name,
+                    description=description,
+                    category=_category(root, skill_md.parent),
+                    frontmatter=frontmatter,
+                    provenance=provenance,
+                    provenance_details=provenance_details,
+                    effective=effective,
+                    compatible=compatible,
+                    environment_relevant=environment_relevant,
+                    enabled=enabled,
+                    bytes=size,
+                    sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                )
+            )
 
     physical_names = {package.name for package in packages}
     report: dict[str, object] = {
         "id": source.id,
         "type": source.type,
         "physical_count": len(packages),
+        "content_root_count": len(roots),
         "effective_count": (
             None
             if source.type == "hermes" and state is None
@@ -622,13 +644,17 @@ def _scan_source(
 def inspect_skill_source_summary(source: SkillSource) -> dict[str, object]:
     """Return cheap local content availability/count without parsing package metadata."""
 
-    root = _validated_source_root(source)
+    roots = _validated_source_roots(source)
     return {
         "id": source.id,
         "type": source.type,
         "available": True,
         "state": "content-only" if source.type == "hermes" else "configured",
-        "count": len(_iter_skill_files(root, hermes=source.type == "hermes")),
+        "count": sum(
+            len(_iter_skill_files(root, hermes=source.type == "hermes"))
+            for root in roots
+        ),
+        "content_root_count": len(roots),
     }
 
 

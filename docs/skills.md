@@ -36,6 +36,8 @@ sources:
     - id: hermes
       type: hermes
       path: /sources/hermes-skills
+      additional_paths:
+        - /sources/private-deployment-project-skills
       os_platform: linux
       state:
         target: hermes
@@ -47,7 +49,7 @@ sources:
 
 The filesystem provider determines its effective catalog from the configured OS and active environment tags.
 
-The Hermes provider uses the mounted active skill tree for content and a live read-only projection from the configured Hermes target for effective names and enable/disable state.
+The Hermes provider uses the mounted active skill tree for content and a live read-only projection from the configured Hermes target for effective names and enable/disable state. `additional_paths` can explicitly add mounted external or trusted project skill roots to the same logical Hermes source. The primary `path` has precedence, followed by `additional_paths` in configured order; a same-named skill in a later content root is ignored. Filesystem sources do not accept `additional_paths`.
 
 ## Hermes parity
 
@@ -68,9 +70,9 @@ The state projector is shipped by Hypershell Reach and streamed over the existin
 
 It does not return other Hermes configuration fields or secret values. The projection is queried when the effective-registry cache is cold, when configured source definitions or effective source content invalidate the cache, when the 60-second TTL expires, or when a caller explicitly requests `refresh=true`. No manual synchronization or Hypershell Reach restart is required after ordinary source-content changes. A remote Hermes-only enable/disable change remains bounded by the TTL unless the caller requests an explicit refresh.
 
-Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in the configured Hypershell Reach content source. This prevents silent drift when a future external or plugin-provided skill becomes active before Hypershell Reach has a readable content source for it.
+Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in any configured content root for that Hermes source. This prevents silent drift when a future external, project or plugin-provided skill becomes active before Hypershell Reach has an explicitly mounted readable content source for it.
 
-The current v1 provider does not follow symlinked skill directories. A Hermes tree that introduces symlinked skill packages fails visibly instead of escaping the configured content boundary.
+The current v1 provider does not follow symlinked skill directories. A Hermes tree that introduces symlinked skill packages must expose the real package through an explicit mounted `additional_paths` entry instead of escaping the configured content boundary through the symlink.
 
 ## Discovery
 

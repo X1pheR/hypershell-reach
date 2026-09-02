@@ -259,6 +259,93 @@ def test_hermes_effective_names_are_authoritative(tmp_path) -> None:
         registry.get("hermes:two")
 
 
+def test_hermes_additional_content_path_affects_source_fingerprint(tmp_path) -> None:
+    primary = tmp_path / "primary"
+    additional = tmp_path / "additional"
+    _skill(primary, "one", name="one")
+    skill_md = _skill(additional, "workspace-dispatch", name="workspace-dispatch")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(primary),
+        additional_paths=[str(additional)],
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+
+    before = skill_sources_fingerprint([source])
+    skill_md.write_text(skill_md.read_text(encoding="utf-8") + "\nChanged.\n", encoding="utf-8")
+    after = skill_sources_fingerprint([source])
+
+    assert before != after
+
+
+def test_hermes_additional_content_path_satisfies_effective_parity(tmp_path) -> None:
+    primary = tmp_path / "primary"
+    additional = tmp_path / "additional"
+    _skill(primary, "one", name="one")
+    _skill(additional, "workspace-dispatch", name="workspace-dispatch")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(primary),
+        additional_paths=[str(additional)],
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    state = HermesState(
+        effective_names=frozenset({"one", "workspace-dispatch"}),
+        disabled=frozenset(),
+        external_dirs=(),
+        consumer_platform="cli",
+    )
+
+    registry = build_skill_registry([source], {"hermes": state})
+
+    assert [skill.id for skill in registry.list()] == ["hermes:one", "hermes:workspace-dispatch"]
+    assert registry.get("hermes:workspace-dispatch").root == additional.resolve()
+    assert registry.source_reports[0]["content_root_count"] == 2
+    assert registry.source_reports[0]["exact_content_parity"] is True
+
+
+def test_hermes_primary_content_path_wins_duplicate_name(tmp_path) -> None:
+    primary = tmp_path / "primary"
+    additional = tmp_path / "additional"
+    _skill(primary, "same", name="same")
+    _skill(additional, "same", name="same")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(primary),
+        additional_paths=[str(additional)],
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    state = HermesState(
+        effective_names=frozenset({"same"}),
+        disabled=frozenset(),
+        external_dirs=(),
+        consumer_platform="cli",
+    )
+
+    registry = build_skill_registry([source], {"hermes": state})
+
+    assert registry.get("hermes:same").root == primary.resolve()
+    assert registry.source_reports[0]["physical_count"] == 1
+
+
 def test_missing_effective_hermes_content_fails_closed(tmp_path) -> None:
     _skill(tmp_path, "one", name="one")
     source = SkillSource(
