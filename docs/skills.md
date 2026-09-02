@@ -72,7 +72,7 @@ It does not return other Hermes configuration fields or secret values. The proje
 
 Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in any configured content root for that Hermes source. This prevents silent drift when a future external, project or plugin-provided skill becomes active before Hypershell Reach has an explicitly mounted readable content source for it.
 
-The current v1 provider does not follow symlinked skill directories. A Hermes tree that introduces symlinked skill packages must expose the real package through an explicit mounted `additional_paths` entry instead of escaping the configured content boundary through the symlink.
+The current v1 provider never follows symlinked skill directories. Filesystem sources reject them explicitly. Hermes sources skip symlinked package directories so an effective skill must still be backed by a real package in the primary path or an explicit mounted `additional_paths` root; otherwise exact-content parity fails closed.
 
 ## Discovery
 
@@ -94,7 +94,7 @@ Three hashes have deliberately separate meanings:
 - each skill `sha256` is the existing SHA-256 of its normalized `SKILL.md` content;
 - the effective-source freshness fingerprint is internal cache state and hashes source-qualified package paths plus raw file content, including supporting files and Hermes discovery/provenance metadata. It is not another client-visible version.
 
-Filesystem timestamps, inode numbers, ownership and modes do not affect the deterministic content fingerprint. They are used only by the process-local cheap probe to decide when that fingerprint must be recomputed. Added, removed or renamed package files do affect the fingerprint. Freshness scans reject symlinked source/skill structures consistently with normal discovery and are bounded to 20,000 hashed files, 512 MiB of package content and 50,000 tracked probe paths per snapshot.
+Filesystem timestamps, inode numbers, ownership and modes do not affect the deterministic content fingerprint. They are used only by the process-local cheap probe to decide when that fingerprint must be recomputed. Added, removed or renamed package files do affect the fingerprint. Freshness scans use the same symlink policy as normal discovery: source roots and filesystem-skill symlink structures are rejected, while Hermes symlinked package directories are skipped and remain subject to exact-content parity. Scans are bounded to 20,000 hashed files, 512 MiB of package content and 50,000 tracked probe paths per snapshot.
 
 `skill_get` returns:
 

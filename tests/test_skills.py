@@ -404,6 +404,74 @@ def test_binary_file_returns_metadata_without_base64(tmp_path) -> None:
     assert result["returned_bytes"] == 3
 
 
+def test_hermes_symlinked_skill_directory_is_skipped_when_explicit_content_exists(tmp_path) -> None:
+    outside = tmp_path / "outside"
+    _skill(outside, "workspace-dispatch", name="workspace-dispatch", body="Symlink target")
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "workspace-dispatch").symlink_to(
+        outside / "workspace-dispatch",
+        target_is_directory=True,
+    )
+    additional = tmp_path / "additional"
+    _skill(additional, "workspace-dispatch", name="workspace-dispatch", body="Explicit content")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(primary),
+        additional_paths=[str(additional)],
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    state = HermesState(
+        effective_names=frozenset({"workspace-dispatch"}),
+        disabled=frozenset(),
+        external_dirs=(),
+        consumer_platform="cli",
+    )
+
+    registry = build_skill_registry([source], {"hermes": state})
+
+    skill = registry.get("hermes:workspace-dispatch")
+    assert skill.root == additional.resolve()
+    assert "Explicit content" in (skill.skill_dir / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_hermes_symlinked_skill_directory_without_content_fails_parity(tmp_path) -> None:
+    outside = tmp_path / "outside"
+    _skill(outside, "workspace-dispatch", name="workspace-dispatch")
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "workspace-dispatch").symlink_to(
+        outside / "workspace-dispatch",
+        target_is_directory=True,
+    )
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(primary),
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    state = HermesState(
+        effective_names=frozenset({"workspace-dispatch"}),
+        disabled=frozenset(),
+        external_dirs=(),
+        consumer_platform="cli",
+    )
+
+    with pytest.raises(RuntimeError, match="outside the configured content source"):
+        build_skill_registry([source], {"hermes": state})
+
+
 def test_symlinked_skill_directory_is_rejected(tmp_path) -> None:
     outside = tmp_path / "outside"
     _skill(outside, "skill", name="linked")

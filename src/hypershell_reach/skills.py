@@ -267,6 +267,8 @@ def _iter_skill_files(
             if has_skill_md and dirname in SKILL_SUPPORT_DIRS:
                 continue
             if child.is_symlink():
+                if hermes:
+                    continue
                 raise ValueError(f"symlinked skill directories are not supported: {child}")
             kept.append(dirname)
         dirnames[:] = kept
