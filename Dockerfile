@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
 
-ARG REACH_VERSION=0.5.1
+ARG REACH_VERSION=0.5.2
 ARG REACH_REVISION=unknown
 ARG REACH_CREATED=unknown
 LABEL org.opencontainers.image.title="Hypershell Reach" \

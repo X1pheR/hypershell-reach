@@ -156,6 +156,7 @@ class SkillSource(BaseModel):
     id: str = Field(min_length=1, max_length=63)
     type: Literal["filesystem", "hermes"] = "filesystem"
     path: str = Field(min_length=1)
+    additional_paths: list[str] = Field(default_factory=list)
     enabled: bool = True
     os_platform: Literal["linux", "macos", "windows"] | None = None
     active_environments: list[str] = Field(default_factory=list)
@@ -175,6 +176,22 @@ class SkillSource(BaseModel):
             raise ValueError("skill source paths must be absolute")
         return value
 
+    @field_validator("additional_paths")
+    @classmethod
+    def require_absolute_additional_paths(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            value = str(raw).strip()
+            if not value:
+                continue
+            if not Path(value).is_absolute():
+                raise ValueError("additional skill source paths must be absolute")
+            if value not in seen:
+                seen.add(value)
+                normalized.append(value)
+        return normalized
+
     @field_validator("active_environments")
     @classmethod
     def normalize_environments(cls, values: list[str]) -> list[str]:
@@ -190,6 +207,10 @@ class SkillSource(BaseModel):
             raise ValueError("Hermes skill sources require a state projection")
         if self.type == "filesystem" and self.state is not None:
             raise ValueError("filesystem skill sources must not configure Hermes state")
+        if self.type != "hermes" and self.additional_paths:
+            raise ValueError("additional skill source paths are supported only for Hermes sources")
+        if self.path in self.additional_paths:
+            raise ValueError("additional skill source paths must not repeat the primary path")
         return self
 
 

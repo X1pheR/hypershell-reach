@@ -36,6 +36,8 @@ sources:
     - id: hermes
       type: hermes
       path: /sources/hermes-skills
+      additional_paths:
+        - /sources/private-deployment-project-skills
       os_platform: linux
       state:
         target: hermes
@@ -47,7 +49,7 @@ sources:
 
 The filesystem provider determines its effective catalog from the configured OS and active environment tags.
 
-The Hermes provider uses the mounted active skill tree for content and a live read-only projection from the configured Hermes target for effective names and enable/disable state.
+The Hermes provider uses the mounted active skill tree for content and a live read-only projection from the configured Hermes target for effective names and enable/disable state. `additional_paths` can explicitly add mounted external or trusted project skill roots to the same logical Hermes source. The primary `path` has precedence, followed by `additional_paths` in configured order; a same-named skill in a later content root is ignored. Filesystem sources do not accept `additional_paths`.
 
 ## Hermes parity
 
@@ -68,9 +70,9 @@ The state projector is shipped by Hypershell Reach and streamed over the existin
 
 It does not return other Hermes configuration fields or secret values. The projection is queried when the effective-registry cache is cold, when configured source definitions or effective source content invalidate the cache, when the 60-second TTL expires, or when a caller explicitly requests `refresh=true`. No manual synchronization or Hypershell Reach restart is required after ordinary source-content changes. A remote Hermes-only enable/disable change remains bounded by the TTL unless the caller requests an explicit refresh.
 
-Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in the configured Hypershell Reach content source. This prevents silent drift when a future external or plugin-provided skill becomes active before Hypershell Reach has a readable content source for it.
+Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in any configured content root for that Hermes source. This prevents silent drift when a future external, project or plugin-provided skill becomes active before Hypershell Reach has an explicitly mounted readable content source for it.
 
-The current v1 provider does not follow symlinked skill directories. A Hermes tree that introduces symlinked skill packages fails visibly instead of escaping the configured content boundary.
+The current v1 provider never follows symlinked skill directories. Filesystem sources reject them explicitly. Hermes sources skip symlinked package directories so an effective skill must still be backed by a real package in the primary path or an explicit mounted `additional_paths` root; otherwise exact-content parity fails closed.
 
 ## Discovery
 
@@ -92,7 +94,7 @@ Three hashes have deliberately separate meanings:
 - each skill `sha256` is the existing SHA-256 of its normalized `SKILL.md` content;
 - the effective-source freshness fingerprint is internal cache state and hashes source-qualified package paths plus raw file content, including supporting files and Hermes discovery/provenance metadata. It is not another client-visible version.
 
-Filesystem timestamps, inode numbers, ownership and modes do not affect the deterministic content fingerprint. They are used only by the process-local cheap probe to decide when that fingerprint must be recomputed. Added, removed or renamed package files do affect the fingerprint. Freshness scans reject symlinked source/skill structures consistently with normal discovery and are bounded to 20,000 hashed files, 512 MiB of package content and 50,000 tracked probe paths per snapshot.
+Filesystem timestamps, inode numbers, ownership and modes do not affect the deterministic content fingerprint. They are used only by the process-local cheap probe to decide when that fingerprint must be recomputed. Added, removed or renamed package files do affect the fingerprint. Freshness scans use the same symlink policy as normal discovery: source roots and filesystem-skill symlink structures are rejected, while Hermes symlinked package directories are skipped and remain subject to exact-content parity. Scans are bounded to 20,000 hashed files, 512 MiB of package content and 50,000 tracked probe paths per snapshot.
 
 `skill_get` returns:
 

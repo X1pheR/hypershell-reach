@@ -189,6 +189,8 @@ def _skill_source_lines(config: ReachConfig) -> tuple[list[str], int]:
                 f"    Path: {source.path}",
             ]
         )
+        for additional_path in source.additional_paths:
+            lines.append(f"    Additional path: {additional_path}")
         if error is not None:
             lines.append(f"    Error: {error}")
             continue

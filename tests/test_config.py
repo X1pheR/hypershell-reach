@@ -135,6 +135,66 @@ def test_hermes_skill_source_requires_state_projection() -> None:
         ReachConfig.model_validate(payload)
 
 
+def test_hermes_skill_source_accepts_absolute_additional_paths() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "hermes",
+                "type": "hermes",
+                "path": "/skills",
+                "additional_paths": ["/project-skills", "/project-skills", "/external-skills"],
+                "state": {
+                    "target": "docker",
+                    "python_executable": "/usr/bin/python3",
+                    "config_path": "/home/user/.hermes/config.yaml",
+                    "repo_path": "/opt/hermes-agent",
+                },
+            }
+        ]
+    }
+
+    config = ReachConfig.model_validate(payload)
+
+    assert config.sources.skills[0].additional_paths == ["/project-skills", "/external-skills"]
+
+
+def test_additional_skill_source_paths_must_be_absolute_and_hermes_only() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "hermes",
+                "type": "hermes",
+                "path": "/skills",
+                "additional_paths": ["relative/project-skills"],
+                "state": {
+                    "target": "docker",
+                    "python_executable": "/usr/bin/python3",
+                    "config_path": "/home/user/.hermes/config.yaml",
+                    "repo_path": "/opt/hermes-agent",
+                },
+            }
+        ]
+    }
+    with pytest.raises(ValidationError, match="additional skill source paths must be absolute"):
+        ReachConfig.model_validate(payload)
+
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "local",
+                "type": "filesystem",
+                "path": "/skills",
+                "additional_paths": ["/extra"],
+            }
+        ]
+    }
+    with pytest.raises(ValidationError, match="supported only for Hermes"):
+        ReachConfig.model_validate(payload)
+
+
 def test_hermes_skill_state_target_must_exist() -> None:
     payload = _config()
     payload["sources"] = {
