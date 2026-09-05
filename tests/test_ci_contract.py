@@ -26,13 +26,18 @@ def test_release_write_permission_is_job_scoped() -> None:
 def test_release_publishes_versioned_ghcr_image_and_digest_metadata() -> None:
     assert 'image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"' in RELEASE
     assert 'docker login ghcr.io' in RELEASE
-    assert 'docker build \\' in RELEASE
+    assert 'docker buildx build \\' in RELEASE
+    assert '--platform linux/amd64,linux/arm64' in RELEASE
     assert '--build-arg REACH_VERSION="${version}"' in RELEASE
     assert '--build-arg REACH_REVISION="${GITHUB_SHA}"' in RELEASE
-    assert 'docker push "${image}"' in RELEASE
+    assert '--build-arg REACH_CREATED="${created}"' in RELEASE
+    assert '--metadata-file build-metadata.json' in RELEASE
+    assert '--push \\' in RELEASE
+    assert 'containerimage.digest' in RELEASE
+    assert 'platforms: linux/amd64,linux/arm64' in RELEASE
     assert 'IMAGE.txt' in RELEASE
     assert "\x01" not in RELEASE
-    assert '"${push_output}" | sed -n' not in RELEASE
+    assert 'push_output=' not in RELEASE
 
 
 def test_browser_gate_is_reused_by_ci_and_release() -> None:

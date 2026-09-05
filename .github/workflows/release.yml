@@ -41,7 +41,13 @@ jobs:
           export SOURCE_DATE_EPOCH
           uv build --out-dir dist
           sha256sum dist/*.whl dist/*.tar.gz | sed 's#  dist/#  #' > SHA256SUMS
-      - name: Build and publish versioned container image
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Build and publish versioned multi-arch container image
         env:
           GHCR_TOKEN: ${{ github.token }}
         shell: bash
@@ -51,19 +57,21 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}:${version}"
           created="$(date -u -d "@$(git show -s --format=%ct HEAD)" +'%Y-%m-%dT%H:%M:%SZ')"
           printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          docker build \
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
             --build-arg REACH_VERSION="${version}" \
             --build-arg REACH_REVISION="${GITHUB_SHA}" \
             --build-arg REACH_CREATED="${created}" \
             --tag "${image}" \
+            --metadata-file build-metadata.json \
+            --push \
             .
-          push_output="$(docker push "${image}" 2>&1)"
-          echo "${push_output}"
-          digest="$(awk '/digest: sha256:/ {print $3}' <<<"${push_output}" | tail -n 1)"
+          digest="$(python -c 'import json; print(json.load(open("build-metadata.json"))["containerimage.digest"])')"
           test -n "${digest}"
           cat > IMAGE.txt <<EOF
           image: ${image}
           digest: ${digest}
+          platforms: linux/amd64,linux/arm64
           revision: ${GITHUB_SHA}
           EOF
       - name: Publish GitHub release
