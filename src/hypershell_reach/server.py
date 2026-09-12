@@ -202,6 +202,7 @@ class UpdateTaskInput(BaseModel):
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
     clear_next_action: bool = False
     continuity: TaskContinuity | None = None
+    reconcile_mutation: str | None = Field(default=None, min_length=1, max_length=900)
     retained: bool | None = None
 
 
@@ -394,6 +395,17 @@ def _candidate_store() -> CandidateStore:
     return _candidate_store_instance
 
 
+def _prepare_task_execution(
+    *, task_id: str | None, may_mutate: bool, purpose: str
+) -> None:
+    if task_id is None:
+        return
+    if may_mutate:
+        _task_store().mark_mutation_pending(task_id, purpose=purpose)
+    else:
+        _task_store().require_open(task_id)
+
+
 async def _tracked_ssh_run(
     *,
     operation: RunOperation,
@@ -413,8 +425,7 @@ async def _tracked_ssh_run(
     script_sha256: str | None = None,
     argument_names: list[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
-    if task_id is not None:
-        _task_store().require_open(task_id)
+    _prepare_task_execution(task_id=task_id, may_mutate=may_mutate, purpose=purpose)
     store = _run_store()
     record = store.create(
         operation=operation,
@@ -826,7 +837,10 @@ async def list_tools() -> list[types.Tool]:
         types.Tool(
             name="update_task",
             description=(
-                "Update one current Hypershell Reach task record. Terminal task status cannot be reopened."
+                "Update one current Hypershell Reach task record. Continuity fields are merge-patched: "
+                "omitted fields are preserved and explicitly supplied values replace that field. "
+                "Use reconcile_mutation with postcondition evidence to clear Reach's generated "
+                "pending-mutation blocker. Terminal task status cannot be reopened."
             ),
             inputSchema=UpdateTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -840,8 +854,9 @@ async def list_tools() -> list[types.Tool]:
             name="close_task",
             description=(
                 "Atomically close one Hypershell Reach task as completed or cancelled, persist the final "
-                "record, and move it from the active root to the archive root. Retries of the "
-                "same committed final state are idempotent."
+                "record, and move it from the active root to the archive root. Completed closure fails "
+                "while next_action or continuity blockers remain. Retries of the same committed final "
+                "state are idempotent."
             ),
             inputSchema=CloseTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
@@ -1223,6 +1238,7 @@ async def call_tool(
                 next_action=args.next_action,
                 clear_next_action=args.clear_next_action,
                 continuity=args.continuity,
+                reconcile_mutation=args.reconcile_mutation,
                 retained=args.retained,
             ).model_dump()
         elif name == "close_task":
@@ -1284,8 +1300,9 @@ async def call_tool(
                 args.target, script.metadata.timeout_seconds, synchronous=False
             )
             ensure_target_compatible(script, target.capabilities)
-            if args.task_id is not None:
-                _task_store().require_open(args.task_id)
+            _prepare_task_execution(
+                task_id=args.task_id, may_mutate=script.metadata.mutating, purpose=args.purpose
+            )
             result = await _submit_async_execution(
                 ExecutionSubmission(
                     operation="run_script",
@@ -1311,8 +1328,7 @@ async def call_tool(
         elif name == "start_command":
             args = CommandInput(**arguments)
             _target_runtime(args.target, args.timeout_seconds, synchronous=False)
-            if args.task_id is not None:
-                _task_store().require_open(args.task_id)
+            _prepare_task_execution(task_id=args.task_id, may_mutate=True, purpose=args.purpose)
             result = await _submit_async_execution(
                 ExecutionSubmission(
                     operation="run_command",
@@ -1345,8 +1361,7 @@ async def call_tool(
         elif name == "start_shell":
             args = ShellInput(**arguments)
             _target_runtime(args.target, args.timeout_seconds, synchronous=False)
-            if args.task_id is not None:
-                _task_store().require_open(args.task_id)
+            _prepare_task_execution(task_id=args.task_id, may_mutate=True, purpose=args.purpose)
             result = await _submit_async_execution(
                 ExecutionSubmission(
                     operation="run_shell",

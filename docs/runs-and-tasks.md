@@ -104,11 +104,11 @@ appdata/reach/tasks/
 
 Task v2 adds a monotonic `revision`; new records start at revision `1`. Existing Task v1 records remain readable without being rewritten and are projected as revision `0` in memory. The first successful mutation of a v1 record writes Task v2 and advances its revision. Unknown persisted fields fail validation.
 
-The `continuity` snapshot remains bounded and replaceable. It can hold authorization context, authoritative sources, completed material work, validation, cleanup, recovery, blockers and material assumptions. It is intended for safe resume or handoff, not command history.
+The `continuity` snapshot remains bounded. On `update_task` and `close_task`, continuity is merge-patched: omitted fields are preserved, explicitly supplied fields replace that field, and an explicit empty list clears a list field. It can hold authorization context, authoritative sources, completed material work, validation, cleanup, recovery, blockers and material assumptions. It is intended for safe resume or handoff, not command history.
 
 ### Mutation concurrency and durability
 
-Task mutations use a narrowly scoped per-Task interprocess lock. `expected_revision` provides compare-and-swap semantics for callers that perform read-modify-write operations: a stale revision is rejected and cannot overwrite a newer committed Task state. The field remains optional on `update_task` and `close_task` for compatibility with the pre-v2 MCP input contract; compatibility calls are still serialized and apply typed partial mutations rather than arbitrary document replacement.
+Task mutations use a narrowly scoped per-Task interprocess lock. `expected_revision` provides compare-and-swap semantics for callers that perform read-modify-write operations: a stale revision is rejected and cannot overwrite a newer committed Task state. The field remains optional on `update_task` and `close_task` for compatibility with the pre-v2 MCP input contract; compatibility calls are still serialized and apply typed partial mutations rather than arbitrary document replacement. Nested continuity updates use the same patch semantics, so a validation-only update cannot erase previously committed cleanup, recovery or source state.
 
 Every Task YAML mutation writes a complete validated record to a temporary file inside the same Task directory, fsyncs the file, atomically replaces `task.yaml`, and fsyncs the containing directory. Creation additionally fsyncs the active root. A close writes and fsyncs the final terminal record before the directory move, then atomically moves the Task directory on the same filesystem and fsyncs both active and archive roots. Malformed Task-shaped filesystem entries and duplicate Task IDs across roots fail safe.
 
@@ -116,7 +116,9 @@ Every Task YAML mutation writes a complete validated record to a temporary file 
 
 Task states are `active`, `partial`, `blocked`, `completed` and `cancelled`. Only `active`, `partial` and `blocked` may remain in the active Task root after normal operation or startup recovery. Only open Tasks accept new linked Runs.
 
-`close_task` is the explicit terminal boundary. It owns the status transition, final metadata update, durable Task record and active-to-archive move. For backward compatibility, `update_task` with `status=completed|cancelled` enters the same close boundary, and `archive_task` remains an idempotent compatibility helper for already-terminal callers. A successful close therefore never requires a second caller-controlled step.
+A Task-linked Reach execution that is potentially mutating creates one reserved `[reach:pending-mutation]` blocker before remote dispatch or durable asynchronous submission. Raw command/shell executions are treated as potentially mutating; managed scripts use their registry-owned `mutating` metadata. Repeated mutations keep one generated blocker representing all task-linked mutations since the last reconciliation, with the latest execution purpose as bounded context. The blocker can be released only through `update_task(reconcile_mutation=...)`, which records the supplied postcondition evidence in `continuity.validation`.
+
+`close_task` is the explicit terminal boundary. It owns the status transition, final metadata update, durable Task record and active-to-archive move. A new `completed` close fails while `next_action` is still present or any continuity blocker remains. This makes postcondition reconciliation a technical completion gate rather than a caller convention. `cancelled` may still archive intentionally abandoned work with unresolved state. For backward compatibility, `update_task` with `status=completed|cancelled` enters the same close boundary, and `archive_task` remains an idempotent compatibility helper for already-terminal callers.
 
 A retry of the same close request returns the committed archived record without incrementing the revision again. If the final terminal YAML committed but the directory move was interrupted, retry completes the move. If the rename committed but root-directory fsync failed, retry re-establishes the required fsync boundary. Conflicting terminal outcomes fail rather than silently rewriting final state.
 
@@ -127,8 +129,8 @@ On writable server startup Hypershell Reach runs Task repair before retention. T
 - `list_tasks` returns bounded current Tasks and can optionally include archived Tasks.
 - `get_task` returns one current or archived Task.
 - `create_task` creates Task v2 continuity state without executing remotely.
-- `update_task` applies a typed partial update and supports `expected_revision` CAS. A terminal status uses the close boundary.
-- `close_task` atomically closes and archives a Task from the caller perspective.
+- `update_task` applies a typed merge-safe partial update and supports `expected_revision` CAS. `reconcile_mutation` records postcondition evidence and clears Reach's generated pending-mutation blocker. A terminal status uses the close boundary and cannot simultaneously perform reconciliation.
+- `close_task` atomically closes and archives a Task from the caller perspective; completed closure requires no remaining next action or blockers.
 - `archive_task` is retained for backward compatibility with the former two-step lifecycle.
 
 ## Retention

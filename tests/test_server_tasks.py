@@ -95,17 +95,26 @@ async def test_task_lifecycle_and_run_linkage(tmp_path, monkeypatch) -> None:
         "update_task",
         {
             "task_id": created["id"],
+            "clear_next_action": True,
             "continuity": {
                 "authorization": "Use only the configured example target.",
                 "completed": ["Preflight context captured.", "Execution completed."],
                 "validation": ["Linked run succeeded."],
             },
+            "reconcile_mutation": "Linked run succeeded and its postcondition was read back.",
         },
     )
     updated = json.loads(updated_content[0].text)
-    assert updated["continuity"]["validation"] == ["Linked run succeeded."]
+    assert updated["continuity"]["validation"][0] == "Linked run succeeded."
+    assert updated["continuity"]["validation"][-1].startswith("Mutation reconciliation:")
+    assert updated["continuity"]["blockers"] == []
 
-    await server.call_tool("update_task", {"task_id": created["id"], "status": "completed"})
+    completed_content = await server.call_tool(
+        "update_task", {"task_id": created["id"], "status": "completed"}
+    )
+    completed = json.loads(completed_content[0].text)
+    assert completed["status"] == "completed"
+    assert completed["archived_at"] is not None
     archived_content = await server.call_tool("archive_task", {"task_id": created["id"]})
     archived = json.loads(archived_content[0].text)
     assert archived["archived_at"] is not None
@@ -214,3 +223,156 @@ def test_server_task_store_repairs_terminal_residue_on_initialization(tmp_path, 
     assert initialized.get(created.id).status == "completed"
     assert not (tmp_path / "tasks" / created.id).exists()
     assert (tmp_path / "trash" / created.id / "task.yaml").is_file()
+
+
+@pytest.mark.asyncio
+async def test_task_linked_mutating_run_marks_reconciliation_before_dispatch(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", RunStore(config.workspace.runs))
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+
+    created_content = await server.call_tool(
+        "create_task",
+        {
+            "title": "Freeze runtime",
+            "objective": "Restore every intentionally stopped service before completion.",
+        },
+    )
+    created = json.loads(created_content[0].text)
+    blockers_seen_at_dispatch: list[str] = []
+
+    async def fake_run_ssh(**kwargs):
+        blockers_seen_at_dispatch.extend(
+            server._task_store_instance.get(created["id"]).continuity.blockers
+        )
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "ok", "bytes": 2, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    result = await server.call_tool(
+        "run_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Temporarily stop Ignis for a controlled rebuild.",
+            "task_id": created["id"],
+        },
+    )
+
+    assert json.loads(result[0].text)["execution"]["status"] == "succeeded"
+    assert len(blockers_seen_at_dispatch) == 1
+    assert blockers_seen_at_dispatch[0].startswith("[reach:pending-mutation]")
+    assert "Temporarily stop Ignis" in blockers_seen_at_dispatch[0]
+
+
+@pytest.mark.asyncio
+async def test_update_task_reconciles_pending_mutation_with_validation_evidence(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", RunStore(config.workspace.runs))
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+
+    created_content = await server.call_tool(
+        "create_task",
+        {"title": "Freeze runtime", "objective": "Restore temporary service state."},
+    )
+    created = json.loads(created_content[0].text)
+
+    async def fake_run_ssh(**kwargs):
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "ok", "bytes": 2, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    await server.call_tool(
+        "run_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Temporarily stop Ignis for a controlled rebuild.",
+            "task_id": created["id"],
+        },
+    )
+
+    before = server._task_store_instance.get(created["id"])
+    assert any(item.startswith("[reach:pending-mutation]") for item in before.continuity.blockers)
+
+    reconciled_content = await server.call_tool(
+        "update_task",
+        {
+            "task_id": created["id"],
+            "expected_revision": before.revision,
+            "reconcile_mutation": "Home and OCI Ignis observed running with restart_count=0.",
+        },
+    )
+    reconciled = json.loads(reconciled_content[0].text)
+
+    assert not any(
+        item.startswith("[reach:pending-mutation]")
+        for item in reconciled["continuity"]["blockers"]
+    )
+    assert reconciled["continuity"]["validation"][-1] == (
+        "Mutation reconciliation: Home and OCI Ignis observed running with restart_count=0."
+    )
+
+
+@pytest.mark.asyncio
+async def test_task_linked_async_mutation_marks_reconciliation_before_submission(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", RunStore(config.workspace.runs))
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+
+    created_content = await server.call_tool(
+        "create_task",
+        {"title": "Async freeze", "objective": "Track mutation before durable submission."},
+    )
+    created = json.loads(created_content[0].text)
+    blockers_seen_at_submission: list[str] = []
+
+    async def fake_submit(submission):
+        blockers_seen_at_submission.extend(
+            server._task_store_instance.get(created["id"]).continuity.blockers
+        )
+        return {"run_id": "run-20260913T000000000000Z-abcdef123456", "status": "running"}
+
+    monkeypatch.setattr(server, "_submit_async_execution", fake_submit)
+    result = await server.call_tool(
+        "start_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Temporarily stop a service for asynchronous maintenance.",
+            "task_id": created["id"],
+        },
+    )
+
+    assert json.loads(result[0].text)["status"] == "running"
+    assert len(blockers_seen_at_submission) == 1
+    assert blockers_seen_at_submission[0].startswith("[reach:pending-mutation]")
