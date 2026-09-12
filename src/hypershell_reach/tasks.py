@@ -21,6 +21,7 @@ BoundedTaskText = Annotated[str, Field(min_length=1, max_length=1_000)]
 _TASK_ID = re.compile(r"^task-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _OPEN_STATUSES = {"active", "partial", "blocked"}
 _TERMINAL_STATUSES = {"completed", "cancelled"}
+PENDING_MUTATION_BLOCKER_PREFIX = "[reach:pending-mutation]"
 
 
 def utc_now() -> datetime:
@@ -336,6 +337,15 @@ class TaskStore:
         if clear_next_action and next_action is not None:
             raise ValueError("next_action and clear_next_action are mutually exclusive")
 
+    @staticmethod
+    def _merge_continuity(
+        current: TaskContinuity,
+        patch: TaskContinuity | dict[str, object],
+    ) -> TaskContinuity:
+        parsed = patch if isinstance(patch, TaskContinuity) else TaskContinuity.model_validate(patch)
+        updates = {name: getattr(parsed, name) for name in parsed.model_fields_set}
+        return TaskContinuity.model_validate({**current.model_dump(), **updates})
+
     def _build_updated(
         self,
         record: TaskRecord,
@@ -402,11 +412,43 @@ class TaskStore:
             return False
         if clear_next_action and record.next_action is not None:
             return False
-        if continuity is not None and record.continuity != TaskContinuity.model_validate(continuity):
+        if continuity is not None and record.continuity != self._merge_continuity(
+            record.continuity, continuity
+        ):
             return False
         if retained is not None and record.retained != retained:
             return False
         return True
+
+    def mark_mutation_pending(self, task_id: str, *, purpose: str) -> TaskRecord:
+        self._require_writable()
+        with self._lock(task_id):
+            directory = self._current_dir(task_id)
+            archived = self._archived_dir(task_id)
+            self._validate_directory_entry(directory)
+            self._validate_directory_entry(archived)
+            if directory.exists() and archived.exists():
+                raise RuntimeError(f"task exists in current and archive: {task_id}")
+            if archived.exists():
+                raise ValueError(f"task is archived: {task_id}")
+            if not directory.is_dir():
+                raise ValueError(f"unknown task: {task_id}")
+            record = self._read_dir(directory)
+            if record.status not in _OPEN_STATUSES:
+                raise ValueError(f"task is terminal: {task_id}")
+            blockers = [
+                blocker
+                for blocker in record.continuity.blockers
+                if not blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX)
+            ]
+            blockers.append(
+                f"{PENDING_MUTATION_BLOCKER_PREFIX} Mutating execution requires "
+                f"postcondition reconciliation before Task completion. Latest purpose: {purpose}"
+            )
+            continuity = record.continuity.model_copy(update={"blockers": blockers})
+            updated = self._build_updated(record, continuity=continuity)
+            self._atomic_write(directory, updated)
+            return updated
 
     def update(
         self,
@@ -421,6 +463,7 @@ class TaskStore:
         next_action: str | None = None,
         clear_next_action: bool = False,
         continuity: TaskContinuity | None = None,
+        reconcile_mutation: str | None = None,
         retained: bool | None = None,
     ) -> TaskRecord:
         self._require_writable()
@@ -431,6 +474,8 @@ class TaskStore:
             clear_next_action=clear_next_action,
         )
         if status in _TERMINAL_STATUSES:
+            if reconcile_mutation is not None:
+                raise ValueError("reconcile mutation before terminal task close")
             return self.close(
                 task_id,
                 status=status,
@@ -467,6 +512,43 @@ class TaskStore:
                 raise ValueError(
                     f"stale task revision: expected {expected_revision}, current {record.revision}"
                 )
+            merged_continuity = (
+                self._merge_continuity(record.continuity, continuity)
+                if continuity is not None
+                else record.continuity
+            )
+            had_pending_mutation = any(
+                blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX)
+                for blocker in record.continuity.blockers
+            )
+            has_pending_after_patch = any(
+                blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX)
+                for blocker in merged_continuity.blockers
+            )
+            if had_pending_mutation and not has_pending_after_patch and reconcile_mutation is None:
+                raise ValueError(
+                    "pending mutation blocker requires explicit reconcile_mutation evidence"
+                )
+            if reconcile_mutation is not None:
+                if not had_pending_mutation:
+                    raise ValueError("task has no pending mutation to reconcile")
+                blockers = [
+                    blocker
+                    for blocker in merged_continuity.blockers
+                    if not blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX)
+                ]
+                validation = [
+                    *merged_continuity.validation,
+                    f"Mutation reconciliation: {reconcile_mutation}",
+                ]
+                merged_continuity = TaskContinuity.model_validate(
+                    {**merged_continuity.model_dump(), "blockers": blockers, "validation": validation}
+                )
+            continuity_update = (
+                merged_continuity
+                if continuity is not None or reconcile_mutation is not None
+                else None
+            )
             updated = self._build_updated(
                 record,
                 title=title,
@@ -476,7 +558,7 @@ class TaskStore:
                 status=status,
                 next_action=next_action,
                 clear_next_action=clear_next_action,
-                continuity=continuity,
+                continuity=continuity_update,
                 retained=retained,
             )
             self._atomic_write(directory, updated)
@@ -566,6 +648,11 @@ class TaskStore:
                     f"stale task revision: expected {expected_revision}, current {record.revision}"
                 )
             archived_at = format_timestamp(self._now())
+            merged_continuity = (
+                self._merge_continuity(record.continuity, continuity)
+                if continuity is not None
+                else None
+            )
             updated = self._build_updated(
                 record,
                 title=title,
@@ -575,10 +662,14 @@ class TaskStore:
                 status=status,
                 next_action=next_action,
                 clear_next_action=clear_next_action,
-                continuity=continuity,
+                continuity=merged_continuity,
                 retained=retained,
                 archived_at=archived_at,
             )
+            if status == "completed" and updated.next_action is not None:
+                raise ValueError("completed task cannot retain next_action")
+            if status == "completed" and updated.continuity.blockers:
+                raise ValueError("completed task cannot retain blockers")
             self._atomic_write(current, updated)
             self._move_to_archive(current, archived)
             return self._read_dir(archived)

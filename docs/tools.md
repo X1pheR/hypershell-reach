@@ -143,11 +143,13 @@ Creates a Task v2 record at revision `1` in the configured active Task root. A T
 
 ### `update_task`
 
-Applies a typed partial update to one Task. Callers that perform read-modify-write flows should supply `expected_revision`; a stale value is rejected before state is committed. The argument remains optional for compatibility with the pre-v2 MCP contract, while all writes are serialized by a per-Task interprocess lock. A terminal `status` routes through the same server-owned close boundary as `close_task`, so a successful terminal update cannot leave the Task in the active root.
+Applies a typed partial update to one Task. `continuity` is merge-patched: fields omitted from the request keep their committed values, while explicitly supplied fields replace that field; use an explicit empty list to clear a list field. Callers that perform read-modify-write flows should supply `expected_revision`; a stale value is rejected before state is committed. The argument remains optional for compatibility with the pre-v2 MCP contract, while all writes are serialized by a per-Task interprocess lock.
+
+When a Task-linked Reach execution is potentially mutating, Reach writes one reserved `[reach:pending-mutation]` blocker before dispatch/submission. `update_task(reconcile_mutation=...)` is the explicit evidence-bearing release path: it removes only the generated mutation blocker and appends the supplied postcondition evidence to `continuity.validation`. A continuity patch cannot silently remove that generated blocker. A terminal `status` routes through the same server-owned close boundary as `close_task`, so reconciliation must occur before terminal close.
 
 ### `close_task`
 
-Closes one Task as `completed` or `cancelled`. The server owns the complete boundary: final Task validation, revision increment, durable YAML replacement, Task-directory move to the archive root, and required directory fsyncs. Retrying the same committed final state is idempotent, including recovery when the final record or archive rename committed before the caller received success.
+Closes one Task as `completed` or `cancelled`. The server owns the complete boundary: final Task validation, revision increment, durable YAML replacement, Task-directory move to the archive root, and required directory fsyncs. A new `completed` close fails closed while `next_action` is still set or any continuity blocker remains, including the generated pending-mutation blocker. `cancelled` remains available for abandoned work that intentionally ends with unresolved state. Retrying the same committed final state is idempotent, including recovery when the final record or archive rename committed before the caller received success.
 
 ### `archive_task`
 

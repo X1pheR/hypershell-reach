@@ -46,7 +46,7 @@ def test_create_task_builds_task_record_without_evidence_directory(tmp_path) -> 
     }
 
 
-def test_task_continuity_snapshot_is_structured_bounded_and_replaceable(tmp_path) -> None:
+def test_task_continuity_snapshot_is_structured_bounded_and_patchable(tmp_path) -> None:
     store = TaskStore(tmp_path / "tasks", tmp_path / "trash")
     record = store.create(
         title="Example",
@@ -92,7 +92,8 @@ def test_task_continuity_snapshot_is_structured_bounded_and_replaceable(tmp_path
     )
     assert updated.continuity.completed[-1] == "Applied the bounded source change."
     assert updated.continuity.blockers == []
-    assert updated.continuity.sources == []
+    assert updated.continuity.sources == record.continuity.sources
+    assert updated.continuity.assumptions == record.continuity.assumptions
 
     with pytest.raises(ValidationError):
         store.update(
@@ -308,3 +309,80 @@ def test_cleanup_fsyncs_archive_root_after_retention_delete(tmp_path, monkeypatc
     monkeypatch.setattr(tasks_module.os, "fsync", recording_fsync)
     assert store.cleanup() == [created.id]
     assert str(archive) in fsynced_paths
+
+
+def test_completed_close_rejects_remaining_next_action(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    record = store.create(
+        title="Restore temporary services",
+        objective="Do not complete until temporary runtime state is reconciled.",
+        next_action="Restart Ignis on both hosts.",
+    )
+
+    with pytest.raises(ValueError, match="next_action"):
+        store.close(record.id, status="completed", expected_revision=1)
+
+    assert store.require_open(record.id).status == "active"
+
+
+def test_completed_close_rejects_remaining_blockers(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    record = store.create(
+        title="Restore temporary services",
+        objective="Do not complete until temporary runtime state is reconciled.",
+        continuity={"blockers": ["Ignis restart still needs verification."]},
+    )
+
+    with pytest.raises(ValueError, match="blockers"):
+        store.close(record.id, status="completed", expected_revision=1)
+
+    assert store.require_open(record.id).status == "active"
+
+
+def test_partial_continuity_update_preserves_omitted_state(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    record = store.create(
+        title="Freeze runtime",
+        objective="Preserve cleanup obligations across incremental updates.",
+        continuity={
+            "authorization": "Restore every intentionally stopped service before completion.",
+            "sources": [
+                {
+                    "classification": "observed",
+                    "reference": "runtime/preimage",
+                    "purpose": "Pre-mutation runtime state.",
+                }
+            ],
+            "cleanup": ["Restart Ignis on Home and OCI."],
+            "recovery": "Use the captured preimage if restoration fails.",
+        },
+    )
+
+    updated = store.update(
+        record.id,
+        expected_revision=1,
+        continuity={"validation": ["LiveSync rebuild succeeded."]},
+    )
+
+    assert updated.continuity.authorization == record.continuity.authorization
+    assert updated.continuity.sources == record.continuity.sources
+    assert updated.continuity.cleanup == ["Restart Ignis on Home and OCI."]
+    assert updated.continuity.recovery == record.continuity.recovery
+    assert updated.continuity.validation == ["LiveSync rebuild succeeded."]
+
+
+def test_pending_mutation_blocker_cannot_be_cleared_without_reconciliation(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    record = store.create(title="Mutation", objective="Require explicit reconciliation.")
+    pending = store.mark_mutation_pending(record.id, purpose="Temporarily stop Ignis.")
+
+    with pytest.raises(ValueError, match="reconcile_mutation"):
+        store.update(
+            record.id,
+            expected_revision=pending.revision,
+            continuity={"blockers": []},
+        )
+
+    current = store.get(record.id)
+    assert current.revision == pending.revision
+    assert current.continuity.blockers == pending.continuity.blockers
