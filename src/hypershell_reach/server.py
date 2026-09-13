@@ -824,13 +824,14 @@ async def list_tools() -> list[types.Tool]:
             name="create_task",
             description=(
                 "Create durable local continuity state for substantial or interruption-prone "
-                "work. This does not execute a remote operation."
+                "work, or return an equivalent open Task when the normalized continuity identity "
+                "already exists. This does not execute a remote operation."
             ),
             inputSchema=CreateTaskInput.model_json_schema(),
             annotations=types.ToolAnnotations(
                 readOnlyHint=False,
                 destructiveHint=False,
-                idempotentHint=False,
+                idempotentHint=True,
                 openWorldHint=False,
             ),
         ),

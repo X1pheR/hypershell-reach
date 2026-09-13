@@ -176,6 +176,46 @@ class TaskStore:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    @contextmanager
+    def _create_lock(self) -> Iterator[None]:
+        self._require_writable()
+        path = self.lock_root / "create.lock"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    @staticmethod
+    def _continuity_identity(
+        title: str,
+        objective: str,
+        project_ref: str | None,
+    ) -> tuple[str, str, str | None]:
+        return (
+            title.strip(),
+            objective.strip(),
+            project_ref.strip() if project_ref is not None else None,
+        )
+
+    def _find_equivalent_open_task(
+        self,
+        *,
+        title: str,
+        objective: str,
+        project_ref: str | None,
+    ) -> TaskRecord | None:
+        identity = self._continuity_identity(title, objective, project_ref)
+        for directory in self._iter_task_directories(self.tasks_root):
+            record = self._read_dir(directory)
+            if record.status not in _OPEN_STATUSES:
+                continue
+            if self._continuity_identity(record.title, record.objective, record.project_ref) == identity:
+                return record
+        return None
+
     def _fsync_directory(self, directory: Path) -> None:
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         fd = os.open(directory, flags)
@@ -237,33 +277,42 @@ class TaskStore:
         retained: bool = False,
     ) -> TaskRecord:
         self._require_writable()
-        now = self._now()
-        record = TaskRecord(
-            schema_version=2,
-            revision=1,
-            id=new_task_id(now),
-            title=title,
-            objective=objective,
-            project_ref=project_ref,
-            next_action=next_action,
-            continuity=continuity or TaskContinuity(),
-            retained=retained,
-            created_at=format_timestamp(now),
-            updated_at=format_timestamp(now),
-        )
-        with self._lock(record.id):
-            directory = self._current_dir(record.id)
-            if directory.exists() or self._archived_dir(record.id).exists():
-                raise RuntimeError(f"task already exists: {record.id}")
-            directory.mkdir(mode=0o750)
-            try:
-                self._atomic_write(directory, record)
-                self._fsync_directory(self.tasks_root)
-            except Exception:
-                shutil.rmtree(directory, ignore_errors=True)
-                self._fsync_directory(self.tasks_root)
-                raise
-        return record
+        with self._create_lock():
+            existing = self._find_equivalent_open_task(
+                title=title,
+                objective=objective,
+                project_ref=project_ref,
+            )
+            if existing is not None:
+                return existing
+
+            now = self._now()
+            record = TaskRecord(
+                schema_version=2,
+                revision=1,
+                id=new_task_id(now),
+                title=title,
+                objective=objective,
+                project_ref=project_ref,
+                next_action=next_action,
+                continuity=continuity or TaskContinuity(),
+                retained=retained,
+                created_at=format_timestamp(now),
+                updated_at=format_timestamp(now),
+            )
+            with self._lock(record.id):
+                directory = self._current_dir(record.id)
+                if directory.exists() or self._archived_dir(record.id).exists():
+                    raise RuntimeError(f"task already exists: {record.id}")
+                directory.mkdir(mode=0o750)
+                try:
+                    self._atomic_write(directory, record)
+                    self._fsync_directory(self.tasks_root)
+                except Exception:
+                    shutil.rmtree(directory, ignore_errors=True)
+                    self._fsync_directory(self.tasks_root)
+                    raise
+            return record
 
     def get(self, task_id: str) -> TaskRecord:
         current = self._current_dir(task_id)
