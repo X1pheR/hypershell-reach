@@ -108,6 +108,8 @@ The `continuity` snapshot remains bounded. On `update_task` and `close_task`, co
 
 ### Mutation concurrency and durability
 
+Task creation uses one store-wide interprocess creation lock so equivalent concurrent creators cannot commit duplicate open continuity records. Open-Task equivalence is the case-sensitive `(title, objective, project_ref)` tuple after trimming leading and trailing whitespace from each present value. If an equivalent `active`, `partial` or `blocked` Task already exists, `create_task` returns that record instead of creating a second Task. The repeated create does not merge or overwrite `next_action`, `continuity` or `retained`; callers that intend to change existing continuity state must use `update_task`. Archived or otherwise terminal Tasks do not participate in this create-time equivalence check, so a later genuinely new continuity unit remains creatable.
+
 Task mutations use a narrowly scoped per-Task interprocess lock. `expected_revision` provides compare-and-swap semantics for callers that perform read-modify-write operations: a stale revision is rejected and cannot overwrite a newer committed Task state. The field remains optional on `update_task` and `close_task` for compatibility with the pre-v2 MCP input contract; compatibility calls are still serialized and apply typed partial mutations rather than arbitrary document replacement. Nested continuity updates use the same patch semantics, so a validation-only update cannot erase previously committed cleanup, recovery or source state.
 
 Every Task YAML mutation writes a complete validated record to a temporary file inside the same Task directory, fsyncs the file, atomically replaces `task.yaml`, and fsyncs the containing directory. Creation additionally fsyncs the active root. A close writes and fsyncs the final terminal record before the directory move, then atomically moves the Task directory on the same filesystem and fsyncs both active and archive roots. Malformed Task-shaped filesystem entries and duplicate Task IDs across roots fail safe.
@@ -128,7 +130,7 @@ On writable server startup Hypershell Reach runs Task repair before retention. T
 
 - `list_tasks` returns bounded current Tasks and can optionally include archived Tasks.
 - `get_task` returns one current or archived Task.
-- `create_task` creates Task v2 continuity state without executing remotely.
+- `create_task` creates Task v2 continuity state without executing remotely, or returns an equivalent open Task when the normalized continuity identity already exists.
 - `update_task` applies a typed merge-safe partial update and supports `expected_revision` CAS. `reconcile_mutation` records postcondition evidence and clears Reach's generated pending-mutation blocker. A terminal status uses the close boundary and cannot simultaneously perform reconciliation.
 - `close_task` atomically closes and archives a Task from the caller perspective; completed closure requires no remaining next action or blockers.
 - `archive_task` is retained for backward compatibility with the former two-step lifecycle.

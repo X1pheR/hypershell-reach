@@ -30,7 +30,7 @@ def test_tools_have_truthful_annotations() -> None:
         "set_run_retained": (False, False, True, False),
         "list_tasks": (True, False, True, False),
         "get_task": (True, False, True, False),
-        "create_task": (False, False, False, False),
+        "create_task": (False, False, True, False),
         "update_task": (False, False, False, False),
         "close_task": (False, False, True, False),
         "archive_task": (False, False, True, False),

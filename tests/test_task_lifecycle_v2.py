@@ -74,6 +74,132 @@ def test_new_task_schema_roundtrip_uses_v2_revision_one_and_no_storage_paths(tmp
     assert "linked_run_ids" not in payload
 
 
+def test_sequential_equivalent_task_create_reuses_open_task(tmp_path) -> None:
+    tasks = tmp_path / "tasks"
+    archive = tmp_path / "archive"
+    store = TaskStore(tasks, archive)
+
+    first = store.create(
+        title="Equivalent task",
+        objective="Keep one continuity unit.",
+        project_ref="projects/example.md",
+    )
+    repeated = store.create(
+        title="Equivalent task",
+        objective="Keep one continuity unit.",
+        project_ref="projects/example.md",
+    )
+
+    assert repeated.id == first.id
+    assert [record.id for record in store.list()] == [first.id]
+
+
+def _process_task_create(tasks_root: str, archive_root: str, gate, queue) -> None:
+    store = TaskStore(tasks_root, archive_root)
+    gate.wait(timeout=5)
+    created = store.create(
+        title="Concurrent equivalent",
+        objective="Serialize equivalent creators.",
+        project_ref="projects/example.md",
+    )
+    queue.put(created.id)
+
+
+def test_interprocess_equivalent_task_creates_reuse_one_open_task(tmp_path) -> None:
+    import multiprocessing
+
+    tasks = tmp_path / "tasks"
+    archive = tmp_path / "archive"
+    context = multiprocessing.get_context("fork")
+    gate = context.Event()
+    queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_process_task_create,
+            args=(str(tasks), str(archive), gate, queue),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    gate.set()
+    task_ids = [queue.get(timeout=10) for _ in processes]
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    assert task_ids[0] == task_ids[1]
+    assert [record.id for record in TaskStore(tasks, archive).list()] == [task_ids[0]]
+
+
+def test_equivalent_create_normalizes_outer_whitespace_without_overwriting_state(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    first = store.create(
+        title="Equivalent task",
+        objective="Keep original state.",
+        project_ref="projects/example.md",
+        next_action="Original next action",
+    )
+
+    repeated = store.create(
+        title="  Equivalent task  ",
+        objective="  Keep original state.\n",
+        project_ref=" projects/example.md ",
+        next_action="Must not overwrite",
+        retained=True,
+    )
+
+    assert repeated == first
+    assert repeated.next_action == "Original next action"
+    assert repeated.retained is False
+
+
+def test_archived_equivalent_task_does_not_block_later_new_task(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    first = store.create(
+        title="Repeat later",
+        objective="Allow a later continuity unit.",
+        project_ref="projects/example.md",
+    )
+    store.close(first.id, status="cancelled", expected_revision=1)
+
+    later = store.create(
+        title="Repeat later",
+        objective="Allow a later continuity unit.",
+        project_ref="projects/example.md",
+    )
+
+    assert later.id != first.id
+    assert later.status == "active"
+    assert store.require_open(later.id) == later
+
+
+def test_materially_different_task_identity_remains_creatable(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    original = store.create(
+        title="Identity",
+        objective="Original objective.",
+        project_ref="projects/example.md",
+    )
+    different_objective = store.create(
+        title="Identity",
+        objective="Different objective.",
+        project_ref="projects/example.md",
+    )
+    different_project = store.create(
+        title="Identity",
+        objective="Original objective.",
+        project_ref="projects/other.md",
+    )
+    different_title = store.create(
+        title="Different identity",
+        objective="Original objective.",
+        project_ref="projects/example.md",
+    )
+
+    assert len({original.id, different_objective.id, different_project.id, different_title.id}) == 4
+
+
 def test_task_record_rejects_unknown_persisted_fields(tmp_path) -> None:
     tasks = tmp_path / "tasks"
     archive = tmp_path / "archive"
