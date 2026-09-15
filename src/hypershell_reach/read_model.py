@@ -146,6 +146,7 @@ class ReachReadModel:
                     "id": candidate.id,
                     "title": candidate.title,
                     "status": candidate.promotion.state,
+                    "recurrence_count": candidate.problem.recurrence_count,
                     "promotion_reason": candidate.promotion.rationale,
                     "structured": True,
                 }

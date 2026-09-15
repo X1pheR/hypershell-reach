@@ -485,6 +485,10 @@ def _wp6_detail_client(tmp_path: Path) -> tuple[TestClient, str, str, str, str]:
         ownership=CandidateOwnership(owner_id="X1pheR/hypershell-reach"),
         promotion_rationale="The bounded relationship view is reusable product behavior.",
     )
+    candidate = candidates.record_occurrence(
+        candidate.id,
+        expected_revision=candidate.revision,
+    )
     candidate = candidates.transition(
         candidate.id,
         expected_revision=candidate.revision,
@@ -549,6 +553,7 @@ def test_wp6_candidate_detail_renders_contract_and_exact_task_tool_links(tmp_pat
     listing = client.get("/tooling")
     assert listing.status_code == 200
     assert f'href="/candidates/{candidate_id}"' in listing.text
+    assert 'data-label="Occurrences">2</td>' in listing.text
 
     response = client.get(f"/candidates/{candidate_id}")
     assert response.status_code == 200
@@ -562,6 +567,7 @@ def test_wp6_candidate_detail_renders_contract_and_exact_task_tool_links(tmp_pat
         "Task, Run and managed Tool references resolve to exact read-only detail pages.",
     ):
         assert expected in response.text
+    assert '<dt>Occurrences</dt><dd>2</dd>' in response.text
     assert f'href="/tasks/{task_id}"' in response.text
     assert 'href="/tooling/system.inspect"' in response.text
 

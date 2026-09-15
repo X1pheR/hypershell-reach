@@ -17,6 +17,7 @@ def test_tools_have_truthful_annotations() -> None:
         "get_candidate": (True, False, True, False),
         "create_candidate": (False, False, False, False),
         "update_candidate": (False, False, False, False),
+        "record_candidate_occurrence": (False, False, False, False),
         "approve_candidate": (False, False, True, False),
         "block_candidate": (False, False, True, False),
         "mark_candidate_not_warranted": (False, False, True, False),
@@ -53,6 +54,14 @@ def test_tools_have_truthful_annotations() -> None:
             annotations.idempotentHint,
             annotations.openWorldHint,
         ) == values
+
+
+def test_candidate_occurrence_tool_has_explicit_distinct_occurrence_semantics() -> None:
+    tools = {tool.name: tool for tool in asyncio.run(list_tools())}
+    description = tools["record_candidate_occurrence"].description.lower()
+    assert "distinct observed occurrence" in description
+    assert "recurrence_count" in description
+    assert "does not approve" in description
 
 
 def test_candidate_approval_tool_does_not_confuse_state_mechanics_with_authorization() -> None:

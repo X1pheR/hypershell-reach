@@ -38,9 +38,11 @@ The UI does not display tool source code or deployment filesystem paths.
 
 ### Tooling candidates
 
-Tooling candidates are recurring gaps recorded for possible reusable automation. A candidate is **not** automatically an executable tool. It still needs normal review and implementation before it can become a managed tool.
+Tooling candidates are material automation opportunities recorded as soon as they are observed and sufficiently specified. A Candidate is **not** automatically an executable tool and does not authorize implementation; it still needs normal review and explicit approval before build work starts.
 
-Keeping candidates beside Managed tools shows what may be automated next without creating a separate product area. When structured Candidate storage is configured, each Candidate can open a read-only detail page showing its problem, proposal, safety boundary, ownership, acceptance contract and promotion state. Existing implementation Task and final managed-tool references link to their exact detail pages.
+Each structured Candidate starts with `recurrence_count=1`. A later independently observed occurrence of the same underlying gap increments that count exactly once, so the Tooling view makes repeated cost visible without requiring recurrence before capture. Re-reviewing the same incident does not increment it.
+
+Keeping Candidates beside Managed tools shows what may be automated next without creating a separate product area. Each Candidate can open a read-only detail page showing its problem, occurrence count, proposal, safety boundary, ownership, acceptance contract and promotion state. Existing implementation Task and final managed-tool references link to their exact detail pages.
 
 ## Runs
 

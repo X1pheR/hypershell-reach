@@ -188,6 +188,8 @@ def test_wp6_read_only_provenance_detail_navigation(page: Page) -> None:
     page.goto(f"{BASE_URL}/candidates/ATR-999", wait_until="networkidle")
     expect(page.get_by_role("heading", name="Browser WP6 structured candidate", exact=True)).to_be_visible()
     expect(page.get_by_role("heading", name="Problem", exact=True)).to_be_visible()
+    expect(page.get_by_text("Occurrences", exact=True)).to_be_visible()
+    expect(page.get_by_text("3", exact=True)).to_be_visible()
     expect(page.get_by_role("heading", name="Acceptance contract", exact=True)).to_be_visible()
     expect(page.get_by_role("link", name=task_id, exact=True)).to_have_attribute("href", f"/tasks/{task_id}")
     expect(page.get_by_role("link", name="system.inspect", exact=True)).to_have_attribute(

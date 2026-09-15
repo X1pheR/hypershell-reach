@@ -279,6 +279,13 @@ class UpdateCandidateInput(BaseModel):
         return self
 
 
+class RecordCandidateOccurrenceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str = Field(min_length=2, max_length=64)
+    expected_revision: int = Field(ge=1)
+
+
 class ApproveCandidateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -665,14 +672,31 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="create_candidate",
-            description="Create one structured Candidate proposal. This records a proposal and does not authorize implementation.",
+            description=(
+                "Create one structured Candidate proposal for its first observed occurrence; "
+                "problem.recurrence_count must be 1. This records evidence and does not authorize implementation."
+            ),
             inputSchema=CreateCandidateInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
         ),
         types.Tool(
             name="update_candidate",
-            description="Update Candidate proposal content using expected-revision CAS. Lifecycle state cannot be changed through this operation.",
+            description=(
+                "Update Candidate proposal content using expected-revision CAS. Preserve recurrence_count; "
+                "record_candidate_occurrence owns increments. Lifecycle state cannot be changed here."
+            ),
             inputSchema=UpdateCandidateInput.model_json_schema(),
+            annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+        ),
+        types.Tool(
+            name="record_candidate_occurrence",
+            description=(
+                "Record one new distinct observed occurrence of an existing Candidate by incrementing "
+                "problem.recurrence_count exactly once using expected-revision CAS. Re-reviewing the "
+                "same incident is not a new occurrence. This records evidence only and does not approve "
+                "or authorize implementation."
+            ),
+            inputSchema=RecordCandidateOccurrenceInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
         ),
         types.Tool(
@@ -1120,6 +1144,12 @@ async def call_tool(
                 proposal=args.proposal,
                 ownership=args.ownership,
                 promotion_rationale=args.promotion_rationale,
+            ).model_dump(mode="json")
+        elif name == "record_candidate_occurrence":
+            args = RecordCandidateOccurrenceInput(**arguments)
+            result = _candidate_store().record_occurrence(
+                args.candidate_id,
+                expected_revision=args.expected_revision,
             ).model_dump(mode="json")
         elif name == "approve_candidate":
             args = ApproveCandidateInput(**arguments)

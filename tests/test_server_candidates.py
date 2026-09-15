@@ -47,7 +47,7 @@ def _create_input() -> dict:
         "problem": {
             "summary": "Repeated OIDC migrations require the same preflight checks.",
             "cause": "The checks are reconstructed ad hoc for each migration.",
-            "recurrence": "The same sequence is needed across multiple integrations.",
+            "recurrence_count": 1,
             "evidence": ["Repeated operator workflow with deterministic preconditions."],
         },
         "proposal": {
@@ -154,6 +154,27 @@ async def test_candidate_mcp_lifecycle_is_typed_and_approval_is_dedicated(tmp_pa
         "kind": "managed-tool",
         "id": "filesystem.compare-modes",
     }
+
+
+@pytest.mark.asyncio
+async def test_record_candidate_occurrence_increments_only_recurrence_count(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    _install_stores(tmp_path, monkeypatch, config)
+    created = json.loads((await server.call_tool("create_candidate", _create_input()))[0].text)
+
+    updated = json.loads(
+        (
+            await server.call_tool(
+                "record_candidate_occurrence",
+                {"candidate_id": "ATR-022", "expected_revision": created["revision"]},
+            )
+        )[0].text
+    )
+
+    assert updated["problem"]["recurrence_count"] == 2
+    assert updated["revision"] == 2
+    assert updated["title"] == created["title"]
+    assert updated["proposal"] == created["proposal"]
 
 
 @pytest.mark.asyncio

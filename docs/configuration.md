@@ -26,7 +26,7 @@ workspace:
   candidates: /var/lib/reach/candidates  # optional until the deployment migration gate
 ```
 
-All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata. `tasks` is the active Task root and `trash` is the backward-compatible configuration key for the Task archive root. New Task records use the Task v2 contract; existing Task v1 YAML remains readable. `candidates`, when configured, stores one Hypershell Reach-owned `candidate-v1` YAML record per Candidate. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
+All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata. `tasks` is the active Task root and `trash` is the backward-compatible configuration key for the Task archive root. New Task records use the Task v2 contract; existing Task v1 YAML remains readable. `candidates`, when configured, stores one Hypershell Reach-owned `candidate-v1` YAML record per Candidate. Candidate v1 now carries monotonic `problem.recurrence_count` with default `1`; existing v1 records that contain only the legacy free-text `problem.recurrence` remain readable and resolve to count `1` until a later distinct occurrence is recorded. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
 
 ## Retention
 

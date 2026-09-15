@@ -161,7 +161,6 @@ def test_legacy_candidate_mapping_preserves_known_fields_without_inventing_missi
     assert draft.missing_required_fields == [
         "problem.summary",
         "problem.cause",
-        "problem.recurrence",
         "problem.evidence",
         "proposal.required_inputs",
         "proposal.expected_outputs",
