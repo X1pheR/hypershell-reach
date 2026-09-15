@@ -361,7 +361,11 @@ def _hash_regular_file(path: Path, before: SkillSourceProbeEntry) -> str:
     return digest.hexdigest()
 
 
-def skill_sources_snapshot(sources: list[SkillSource]) -> SkillSourcesSnapshot:
+def skill_sources_snapshot(
+    sources: list[SkillSource],
+    *,
+    include_state_snapshots: bool = True,
+) -> SkillSourcesSnapshot:
     """Build deterministic content freshness plus a cheap process-local change probe.
 
     The fingerprint covers every regular file inside discoverable skill packages plus
@@ -378,6 +382,46 @@ def skill_sources_snapshot(sources: list[SkillSource]) -> SkillSourcesSnapshot:
     for source in sources:
         if not source.enabled:
             continue
+        if (
+            include_state_snapshots
+            and source.type == "hermes"
+            and source.state is not None
+            and source.state.mode == "snapshot"
+        ):
+            assert source.state.snapshot_path is not None
+            state_path = Path(source.state.snapshot_path)
+            if state_path.is_symlink() or not state_path.is_file():
+                raise RuntimeError(
+                    f"Hermes skill-state snapshot is not a regular file for {source.id}"
+                )
+            before = _probe_entry(state_path)
+            file_count += 1
+            if file_count > MAX_FRESHNESS_FILES:
+                raise RuntimeError(
+                    f"skill freshness probe exceeds {MAX_FRESHNESS_FILES} files"
+                )
+            byte_count += before.size
+            if byte_count > MAX_FRESHNESS_BYTES:
+                raise RuntimeError(
+                    f"skill freshness probe exceeds {MAX_FRESHNESS_BYTES} bytes"
+                )
+            state_sha256 = _hash_regular_file(state_path, before)
+            observed_probe_entries.setdefault(state_path, before)
+            digest.update(
+                json.dumps(
+                    {
+                        "id": source.id,
+                        "type": source.type,
+                        "state_snapshot": {
+                            "bytes": before.size,
+                            "sha256": state_sha256,
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                + b"\n"
+            )
         for root_index, root in enumerate(_validated_source_roots(source)):
             source_probe_entries: dict[Path, SkillSourceProbeEntry] = {
                 root: _probe_entry(root)
@@ -467,9 +511,15 @@ def skill_sources_probe_unchanged(snapshot: SkillSourcesSnapshot) -> bool:
 
 
 def skill_sources_fingerprint(sources: list[SkillSource]) -> str:
-    """Return the deterministic content fingerprint for configured enabled sources."""
+    """Return the deterministic cache fingerprint for configured enabled sources."""
 
     return skill_sources_snapshot(sources).fingerprint
+
+
+def skill_source_content_fingerprint(source: SkillSource) -> str:
+    """Return deterministic semantic content identity for one source, excluding state snapshots."""
+
+    return skill_sources_snapshot([source], include_state_snapshots=False).fingerprint
 
 
 def _category(root: Path, skill_dir: Path) -> str | None:

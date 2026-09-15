@@ -135,6 +135,51 @@ def test_hermes_skill_source_requires_state_projection() -> None:
         ReachConfig.model_validate(payload)
 
 
+def test_hermes_skill_source_accepts_snapshot_state() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "hermes",
+                "type": "hermes",
+                "path": "/skills",
+                "state": {
+                    "mode": "snapshot",
+                    "snapshot_path": "/state/hermes.json",
+                },
+            }
+        ]
+    }
+
+    config = ReachConfig.model_validate(payload)
+
+    assert config.sources.skills[0].state is not None
+    assert config.sources.skills[0].state.mode == "snapshot"
+    assert config.sources.skills[0].state.snapshot_path == "/state/hermes.json"
+    assert config.sources.skills[0].state.target is None
+
+
+def test_hermes_snapshot_state_rejects_remote_projection_fields() -> None:
+    payload = _config()
+    payload["sources"] = {
+        "skills": [
+            {
+                "id": "hermes",
+                "type": "hermes",
+                "path": "/skills",
+                "state": {
+                    "mode": "snapshot",
+                    "snapshot_path": "/state/hermes.json",
+                    "target": "docker",
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(ValidationError, match="snapshot Hermes skill state must not configure remote projection"):
+        ReachConfig.model_validate(payload)
+
+
 def test_hermes_skill_source_accepts_absolute_additional_paths() -> None:
     payload = _config()
     payload["sources"] = {

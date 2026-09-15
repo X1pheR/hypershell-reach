@@ -135,19 +135,49 @@ class Sources(BaseModel):
 class HermesSkillState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target: str = Field(min_length=1, max_length=63)
-    python_executable: str = Field(min_length=1)
-    config_path: str = Field(min_length=1)
-    repo_path: str = Field(min_length=1)
+    mode: Literal["remote", "snapshot"] = "remote"
+    target: str | None = Field(default=None, min_length=1, max_length=63)
+    python_executable: str | None = Field(default=None, min_length=1)
+    config_path: str | None = Field(default=None, min_length=1)
+    repo_path: str | None = Field(default=None, min_length=1)
     consumer_platform: str | None = Field(default=None, min_length=1, max_length=64)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
+    snapshot_path: str | None = Field(default=None, min_length=1)
 
-    @field_validator("python_executable", "config_path", "repo_path")
+    @field_validator("python_executable", "config_path", "repo_path", "snapshot_path")
     @classmethod
-    def require_absolute_paths(cls, value: str) -> str:
-        if not Path(value).is_absolute():
+    def require_absolute_paths(cls, value: str | None) -> str | None:
+        if value is not None and not Path(value).is_absolute():
             raise ValueError("Hermes skill-state paths must be absolute")
         return value
+
+    @model_validator(mode="after")
+    def validate_mode(self) -> "HermesSkillState":
+        if self.mode == "snapshot":
+            if self.snapshot_path is None:
+                raise ValueError("snapshot Hermes skill state requires snapshot_path")
+            remote_values = (
+                self.target,
+                self.python_executable,
+                self.config_path,
+                self.repo_path,
+                self.consumer_platform,
+            )
+            if any(value is not None for value in remote_values):
+                raise ValueError(
+                    "snapshot Hermes skill state must not configure remote projection fields"
+                )
+            return self
+        required = {
+            "target": self.target,
+            "python_executable": self.python_executable,
+            "config_path": self.config_path,
+            "repo_path": self.repo_path,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(f"remote Hermes skill state requires: {', '.join(missing)}")
+        return self
 
 
 class SkillSource(BaseModel):
@@ -306,6 +336,7 @@ class ReachConfig(BaseModel):
                 for source in self.sources.skills
                 if source.type == "hermes"
                 and source.state is not None
+                and source.state.mode == "remote"
                 and source.state.target not in self.targets
             }
         )

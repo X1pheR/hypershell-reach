@@ -6,6 +6,8 @@ import pytest
 
 from hypershell_reach import server
 from hypershell_reach.config import ReachConfig
+from hypershell_reach.hermes_snapshot import build_snapshot_payload
+from hypershell_reach.skills import HermesState, skill_source_content_fingerprint
 
 
 def _config(tmp_path) -> ReachConfig:
@@ -55,6 +57,124 @@ def _config(tmp_path) -> ReachConfig:
             },
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_catalog_uses_local_hermes_state_snapshot_without_ssh(tmp_path, monkeypatch) -> None:
+    payload = _config(tmp_path).model_dump(mode="json")
+    snapshot_path = tmp_path / "hermes-state.json"
+    payload["sources"]["skills"][0]["state"] = {
+        "mode": "snapshot",
+        "snapshot_path": str(snapshot_path),
+    }
+    config = ReachConfig.model_validate(payload)
+    source = config.sources.skills[0]
+    snapshot_path.write_text(
+        json.dumps(
+            build_snapshot_payload(
+                source_id=source.id,
+                state=HermesState(
+                    effective_names=frozenset({"example"}),
+                    disabled=frozenset(),
+                    external_dirs=(),
+                    consumer_platform="cli",
+                ),
+                content_fingerprint=skill_source_content_fingerprint(source),
+            ),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "_config", config, raising=False)
+
+    async def fail_run_ssh(**kwargs):
+        raise AssertionError(f"snapshot-backed catalog attempted SSH: {kwargs}")
+
+    monkeypatch.setattr(server, "run_ssh", fail_run_ssh)
+    catalog_content = await server.call_tool("skills_catalog", {"refresh": True})
+    catalog = json.loads(catalog_content[0].text)
+
+    assert catalog["count"] == 1
+    assert catalog["skills"][0]["id"] == "hermes:example"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_state_change_invalidates_skill_cache(tmp_path, monkeypatch) -> None:
+    payload = _config(tmp_path).model_dump(mode="json")
+    snapshot_path = tmp_path / "hermes-state.json"
+
+    payload["sources"]["skills"][0]["state"] = {
+        "mode": "snapshot",
+        "snapshot_path": str(snapshot_path),
+    }
+    config = ReachConfig.model_validate(payload)
+    source = config.sources.skills[0]
+
+    def write_snapshot(*, effective_names: list[str], disabled: list[str]) -> None:
+        snapshot_path.write_text(
+            json.dumps(
+                build_snapshot_payload(
+                    source_id=source.id,
+                    state=HermesState(
+                        effective_names=frozenset(effective_names),
+                        disabled=frozenset(disabled),
+                        external_dirs=(),
+                        consumer_platform="cli",
+                    ),
+                    content_fingerprint=skill_source_content_fingerprint(source),
+                ),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+    write_snapshot(effective_names=["example"], disabled=[])
+    monkeypatch.setattr(server, "_config", config, raising=False)
+
+    first_content = await server.call_tool("skills_catalog", {"refresh": True})
+    first = json.loads(first_content[0].text)
+    assert first["count"] == 1
+
+    write_snapshot(effective_names=[], disabled=["example"])
+    second_content = await server.call_tool("skills_catalog", {})
+    second = json.loads(second_content[0].text)
+
+    assert second["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_catalog_rejects_content_mismatch(tmp_path, monkeypatch) -> None:
+    payload = _config(tmp_path).model_dump(mode="json")
+    snapshot_path = tmp_path / "hermes-state.json"
+    payload["sources"]["skills"][0]["state"] = {
+        "mode": "snapshot",
+        "snapshot_path": str(snapshot_path),
+    }
+    config = ReachConfig.model_validate(payload)
+    source = config.sources.skills[0]
+    snapshot_path.write_text(
+        json.dumps(
+            build_snapshot_payload(
+                source_id=source.id,
+                state=HermesState(
+                    effective_names=frozenset({"example"}),
+                    disabled=frozenset(),
+                    external_dirs=(),
+                    consumer_platform="cli",
+                ),
+                content_fingerprint=skill_source_content_fingerprint(source),
+            ),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    skill_path = tmp_path / "skills/example/SKILL.md"
+    skill_path.write_text(skill_path.read_text(encoding="utf-8") + "\nchanged after snapshot\n", encoding="utf-8")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+
+    content = await server.call_tool("skills_catalog", {"refresh": True})
+
+    assert content[0].text.startswith("ERROR: Hermes snapshot content fingerprint mismatch")
 
 
 @pytest.mark.asyncio
@@ -399,3 +519,60 @@ def test_skill_inputs_store_no_client_scope_or_loaded_skill_state() -> None:
         "refresh",
     }
     assert not any("loaded_skill" in name or "session_skill" in name for name in vars(server))
+
+
+@pytest.mark.asyncio
+async def test_export_hermes_snapshot_binds_live_state_to_content_without_runtime_store_mutation(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+
+    async def fake_run_ssh(**kwargs):
+        return {
+            "status": "succeeded",
+            "stdout": {
+                "text": json.dumps(
+                    {
+                        "schema_version": 1,
+                        "consumer_platform": "cli",
+                        "disabled": [],
+                        "external_dirs": [],
+                        "effective_names": ["example"],
+                    }
+                ),
+                "bytes": 120,
+                "truncated": False,
+            },
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+
+    payload = await server.export_hermes_snapshot(config, "hermes")
+
+    assert payload["source_id"] == "hermes"
+    assert payload["content_fingerprint"] == skill_source_content_fingerprint(config.sources.skills[0])
+    assert payload["effective_names"] == ["example"]
+    encoded = json.dumps(payload, sort_keys=True)
+    assert "/tmp/config.yaml" not in encoded
+    assert "/tmp/hermes" not in encoded
+    assert "203.0.113.10" not in encoded
+
+
+@pytest.mark.asyncio
+async def test_export_hermes_snapshot_rejects_snapshot_backed_source(tmp_path) -> None:
+    payload = _config(tmp_path).model_dump(mode="json")
+    payload["sources"]["skills"][0]["state"] = {
+        "mode": "snapshot",
+        "snapshot_path": str(tmp_path / "state.json"),
+    }
+    config = ReachConfig.model_validate(payload)
+
+    with pytest.raises(ValueError, match="remote Hermes skill source"):
+        await server.export_hermes_snapshot(config, "hermes")
+
+
+@pytest.mark.asyncio
+async def test_export_hermes_snapshot_rejects_unknown_source(tmp_path) -> None:
+    config = _config(tmp_path)
+
+    with pytest.raises(ValueError, match="remote Hermes skill source"):
+        await server.export_hermes_snapshot(config, "missing")

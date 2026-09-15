@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from starlette.testclient import TestClient
 
+from hypershell_reach import service
 from hypershell_reach.config import ReachConfig
 from hypershell_reach.service import create_service_app
 
@@ -83,3 +84,28 @@ def test_service_hosts_ui_api_and_streamable_http_mcp(tmp_path) -> None:
         assert payload["jsonrpc"] == "2.0"
         assert payload["id"] == 1
         assert payload["result"]["serverInfo"]["name"] == "hypershell-reach"
+
+
+def test_cli_exports_hermes_snapshot_without_starting_service(tmp_path, monkeypatch, capsys) -> None:
+    config = _config(tmp_path)
+    expected = {
+        "schema_version": 1,
+        "source_id": "hermes",
+        "content_fingerprint": "a" * 64,
+        "snapshot_revision": "b" * 64,
+    }
+
+    async def fake_export(received_config, source_id):
+        assert received_config is config
+        assert source_id == "hermes"
+        return expected
+
+    monkeypatch.setattr(service, "load_config", lambda _path=None: config)
+    monkeypatch.setattr(service, "export_hermes_snapshot", fake_export, raising=False)
+    monkeypatch.setattr(service.uvicorn, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("service started")))
+
+    service.main(["export-hermes-snapshot", "--config", "/ignored/reach.yaml", "--source", "hermes"])
+
+    import json
+
+    assert json.loads(capsys.readouterr().out) == expected

@@ -83,6 +83,12 @@ Validate before deployment:
 REACH_CONFIG=/path/to/reach.yaml reach validate
 ```
 
+For a remote Hermes skill source, export a canonical read-only offline snapshot manifest with:
+
+```bash
+REACH_CONFIG=/path/to/reach.yaml reach export-hermes-snapshot --source hermes
+```
+
 Start the service:
 
 ```bash

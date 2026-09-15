@@ -22,6 +22,7 @@ from .candidates import (
 from .config import ReachConfig, load_config
 from .execution import run_ssh
 from .executor import ExecutorService, ExecutionSubmission, cancel_execution, submit_execution
+from .hermes_snapshot import build_snapshot_payload, parse_snapshot_payload
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
 from .skills import (
     HermesState,
@@ -30,6 +31,7 @@ from .skills import (
     build_skill_registry,
     list_skill_files,
     read_skill_file,
+    skill_source_content_fingerprint,
     skill_sources_config_signature,
     skill_sources_probe_unchanged,
     skill_sources_snapshot,
@@ -470,9 +472,45 @@ async def _tracked_ssh_run(
     return record.id, execution
 
 
-async def _hermes_state(source) -> HermesState:
+def _hermes_state_from_payload(
+    *,
+    source_id: str,
+    payload: object,
+    stderr_bytes: int = 0,
+) -> HermesState:
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise RuntimeError(f"unsupported Hermes skill-state projection for {source_id}")
+    return HermesState(
+        effective_names=frozenset(str(value) for value in payload.get("effective_names", [])),
+        disabled=frozenset(str(value) for value in payload.get("disabled", [])),
+        external_dirs=tuple(str(value) for value in payload.get("external_dirs", [])),
+        consumer_platform=payload.get("consumer_platform"),
+        stderr_bytes=stderr_bytes,
+    )
+
+
+async def _hermes_state(source, *, config: ReachConfig | None = None) -> HermesState:
     assert source.state is not None
-    target = _config.enabled_target(source.state.target)
+    active_config = _config if config is None else config
+    if source.state.mode == "snapshot":
+        from pathlib import Path
+
+        assert source.state.snapshot_path is not None
+        snapshot_path = Path(source.state.snapshot_path)
+        payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"unsupported Hermes skill-state projection for {source.id}")
+        return parse_snapshot_payload(
+            payload,
+            source_id=source.id,
+            content_fingerprint=skill_source_content_fingerprint(source),
+        )
+
+    assert source.state.target is not None
+    assert source.state.python_executable is not None
+    assert source.state.config_path is not None
+    assert source.state.repo_path is not None
+    target = active_config.enabled_target(source.state.target)
     projector_path = __import__("pathlib").Path(__file__).with_name("hermes_state_projector.py")
     projector = projector_path.read_text(encoding="utf-8")
     import shlex
@@ -492,8 +530,8 @@ async def _hermes_state(source) -> HermesState:
         target=target,
         remote_command=" ".join(shlex.quote(value) for value in argv),
         timeout_seconds=source.state.timeout_seconds,
-        connect_timeout_seconds=_config.resolved_connect_timeout(target),
-        max_output_bytes=min(_config.resolved_max_output(target), 131_072),
+        connect_timeout_seconds=active_config.resolved_connect_timeout(target),
+        max_output_bytes=min(active_config.resolved_max_output(target), 131_072),
         stdin_text=projector,
     )
     if result.get("status") != "succeeded":
@@ -507,18 +545,31 @@ async def _hermes_state(source) -> HermesState:
         payload = json.loads(str(stdout.get("text") or ""))
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Hermes skill-state projection returned invalid JSON for {source.id}") from exc
-    if payload.get("schema_version") != 1:
-        raise RuntimeError(f"unsupported Hermes skill-state projection for {source.id}")
-    return HermesState(
-        effective_names=frozenset(str(value) for value in payload.get("effective_names", [])),
-        disabled=frozenset(str(value) for value in payload.get("disabled", [])),
-        external_dirs=tuple(str(value) for value in payload.get("external_dirs", [])),
-        consumer_platform=payload.get("consumer_platform"),
+    return _hermes_state_from_payload(
+        source_id=source.id,
+        payload=payload,
         stderr_bytes=(
             result.get("stderr", {}).get("bytes", 0)
             if isinstance(result.get("stderr"), dict)
             else 0
         ),
+    )
+
+
+async def export_hermes_snapshot(config: ReachConfig, source_id: str) -> dict[str, object]:
+    source = next((source for source in config.sources.skills if source.id == source_id), None)
+    if (
+        source is None
+        or source.type != "hermes"
+        or source.state is None
+        or source.state.mode != "remote"
+    ):
+        raise ValueError(f"snapshot export requires an existing remote Hermes skill source: {source_id}")
+    state = await _hermes_state(source, config=config)
+    return build_snapshot_payload(
+        source_id=source.id,
+        state=state,
+        content_fingerprint=skill_source_content_fingerprint(source),
     )
 
 

@@ -161,6 +161,28 @@ def test_hermes_provenance_metadata_changes_source_fingerprint(tmp_path) -> None
     assert skill_sources_fingerprint([source]) != first
 
 
+def test_content_fingerprint_excludes_snapshot_state_but_tracks_skill_content(tmp_path) -> None:
+    from hypershell_reach import skills as skills_module
+
+    root = tmp_path / "skills"
+    skill_md = _skill(root, "one", name="one", body="first")
+    snapshot = tmp_path / "state.json"
+    snapshot.write_text('{"snapshot_revision":"a"}', encoding="utf-8")
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(root),
+        state={"mode": "snapshot", "snapshot_path": str(snapshot)},
+    )
+
+    first = skills_module.skill_source_content_fingerprint(source)
+    snapshot.write_text('{"snapshot_revision":"b"}', encoding="utf-8")
+    assert skills_module.skill_source_content_fingerprint(source) == first
+
+    skill_md.write_text(skill_md.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+    assert skills_module.skill_source_content_fingerprint(source) != first
+
+
 def test_configured_source_signature_is_deterministic_and_ordered(tmp_path) -> None:
     first = SkillSource(id="a", path=str(tmp_path / "a"), os_platform="linux")
     second = SkillSource(id="b", path=str(tmp_path / "b"), os_platform="linux")
@@ -481,3 +503,59 @@ def test_symlinked_skill_directory_is_rejected(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="symlinked skill directories"):
         build_skill_registry([SkillSource(id="local", path=str(root))])
+
+
+def test_content_fingerprint_is_independent_of_absolute_source_paths(tmp_path) -> None:
+    from hypershell_reach import skills as skills_module
+
+    home_primary = tmp_path / "home/skills"
+    home_workspace = tmp_path / "home/workspace"
+    oci_primary = tmp_path / "oci/current/skills"
+    oci_workspace = tmp_path / "oci/current/workspace-skills"
+    for root in (home_primary, oci_primary):
+        _skill(root, "one", name="one", body="same")
+    for root in (home_workspace, oci_workspace):
+        _skill(root, "workspace", name="workspace", body="same workspace")
+
+    home = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(home_primary),
+        additional_paths=[str(home_workspace)],
+        state={
+            "target": "hermes",
+            "python_executable": "/usr/bin/python3",
+            "config_path": "/tmp/config.yaml",
+            "repo_path": "/tmp/hermes",
+        },
+    )
+    snapshot_file = tmp_path / "oci/current/state.json"
+    snapshot_file.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_file.write_text("{}", encoding="utf-8")
+    oci = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(oci_primary),
+        additional_paths=[str(oci_workspace)],
+        state={"mode": "snapshot", "snapshot_path": str(snapshot_file)},
+    )
+
+    assert skills_module.skill_source_content_fingerprint(home) == skills_module.skill_source_content_fingerprint(oci)
+
+
+def test_snapshot_state_file_rejects_symlink(tmp_path) -> None:
+    root = tmp_path / "skills"
+    _skill(root, "one", name="one")
+    real_state = tmp_path / "real-state.json"
+    real_state.write_text("{}", encoding="utf-8")
+    linked_state = tmp_path / "state.json"
+    linked_state.symlink_to(real_state)
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(root),
+        state={"mode": "snapshot", "snapshot_path": str(linked_state)},
+    )
+
+    with pytest.raises(RuntimeError, match="snapshot is not a regular file"):
+        skill_sources_fingerprint([source])

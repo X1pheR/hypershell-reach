@@ -12,7 +12,7 @@ skill_read_file(skill_id, relative_path, offset, max_bytes)
 
 `skills_catalog` is the tier-1 discovery surface. It returns only effective skills using the same progressive-disclosure shape as Hermes: source-qualified ID, name, compact description and category, plus the category list, total count and a deterministic `catalog_revision`. Catalog descriptions are capped at 200 characters with an ellipsis when truncated; `skill_get` retains the full validated description and loads up to 128 KiB of `SKILL.md` by default. `skill_read_file` reads supporting files in bounded byte ranges.
 
-The catalog remains derived from live configured state rather than a synchronized copy. Hypershell Reach caches the complete effective registry for 60 seconds, but cache reuse is guarded by a deterministic signature of the configured skill-source definitions and an internal source snapshot. The snapshot contains a deterministic content fingerprint plus a process-local metadata probe over the paths that can affect it. Unchanged probe metadata reuses the cached fingerprint cheaply; any probe change causes a fresh content fingerprint before registry reuse is decided. A source-content change therefore invalidates stale registry state before TTL expiry, while an unchanged source avoids another Hermes projection and registry rebuild. The TTL remains a fallback for effective state that is not represented by mounted source content, such as a remote Hermes enable/disable change. Set `refresh=true` when an explicit immediate rebuild is required.
+Remote Hermes sources derive the catalog from live configured state. Snapshot-backed Hermes sources instead use the last accepted local semantic snapshot and make no Hermes network call. Hypershell Reach caches the complete effective registry for 60 seconds, but cache reuse is guarded by a deterministic signature of the configured skill-source definitions and an internal source snapshot. The snapshot contains a deterministic content fingerprint plus a process-local metadata probe over the paths that can affect it. Unchanged probe metadata reuses the cached fingerprint cheaply; any probe change causes a fresh content fingerprint before registry reuse is decided. A source-content change therefore invalidates stale registry state before TTL expiry, while an unchanged source avoids another Hermes projection and registry rebuild. The TTL remains a fallback for effective state that is not represented by mounted source content, such as a remote Hermes enable/disable change. Set `refresh=true` when an explicit immediate rebuild is required.
 
 Source-qualified IDs avoid cross-source ambiguity:
 
@@ -40,6 +40,7 @@ sources:
         - /sources/private-deployment-project-skills
       os_platform: linux
       state:
+        mode: remote
         target: hermes
         python_executable: /opt/hermes-agent/venv/bin/python
         config_path: /home/operator/.hermes/config.yaml
@@ -73,6 +74,22 @@ It does not return other Hermes configuration fields or secret values. The proje
 Hypershell Reach fails closed when Hermes reports an effective skill whose content is not present in any configured content root for that Hermes source. This prevents silent drift when a future external, project or plugin-provided skill becomes active before Hypershell Reach has an explicitly mounted readable content source for it.
 
 The current v1 provider never follows symlinked skill directories. Filesystem sources reject them explicitly. Hermes sources skip symlinked package directories so an effective skill must still be backed by a real package in the primary path or an explicit mounted `additional_paths` root; otherwise exact-content parity fails closed.
+
+## Offline Hermes snapshots
+
+A standby may configure the same logical Hermes source with `state.mode: snapshot`. Its content roots point at a locally materialized snapshot and `snapshot_path` points at that snapshot's `state.json`. Reach never contacts Hermes for such a source.
+
+Create the canonical state manifest from a remote-mode Reach configuration with:
+
+```bash
+REACH_CONFIG=/etc/reach/reach.yaml reach export-hermes-snapshot --source hermes
+```
+
+The command is read-only: it loads configuration, projects the sanitized Hermes state and hashes the semantic skill content without initializing Run, Task or Candidate stores or starting the service. The JSON manifest contains only the source ID, consumer platform, disabled names, external-directory entries, effective names, a deterministic semantic content fingerprint and a canonical snapshot revision. It excludes Hermes target addresses, credential paths and unrelated configuration.
+
+On a snapshot-backed node Reach independently hashes the local content roots and accepts `state.json` only when all of these match: schema version, source ID, content fingerprint and canonical revision. Snapshot-state bytes are also part of normal cache freshness, so an atomic pointer change invalidates the cached registry immediately even when the 60-second TTL has not elapsed. Absolute source paths are deliberately excluded from the semantic content fingerprint, allowing equivalent Home and standby trees to verify identically. A symlinked snapshot state file is rejected.
+
+Snapshot creation, transfer, retention and atomic pointer switching are deployment responsibilities. Reach provides the deterministic export and verification primitives; it does not replicate peers or schedule synchronization.
 
 ## Discovery
 

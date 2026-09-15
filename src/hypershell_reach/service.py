@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Sequence
+import json
 import sys
 from contextlib import asynccontextmanager
 
@@ -13,7 +15,7 @@ from starlette.routing import Route
 from .config import ReachConfig, load_config
 from .executor import ExecutorService
 from .server import app as mcp_server
-from .server import initialize_runtime, set_executor_service
+from .server import export_hermes_snapshot, initialize_runtime, set_executor_service
 from .ui import create_app as create_web_app
 from .validation import validate_configuration
 
@@ -63,6 +65,16 @@ def _serve_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _snapshot_export_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="reach export-hermes-snapshot",
+        description="Export a canonical read-only Hermes skill snapshot manifest.",
+    )
+    parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
+    parser.add_argument("--source", default="hermes", help="Hermes skill source ID. Default: hermes")
+    return parser
+
+
 def _validate_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="reach validate", description="Validate Hypershell Reach configuration")
     parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
@@ -76,6 +88,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         report = validate_configuration(args.config)
         print(report.text)
         raise SystemExit(0 if report.valid else 1)
+    if arguments and arguments[0] == "export-hermes-snapshot":
+        args = _snapshot_export_parser().parse_args(arguments[1:])
+        payload = asyncio.run(export_hermes_snapshot(load_config(args.config), args.source))
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return
 
     args = _serve_parser().parse_args(arguments)
     if not 1 <= args.port <= 65535:

@@ -150,6 +150,7 @@ sources:
       path: /sources/hermes-skills
       os_platform: linux
       state:
+        mode: remote
         target: hermes
         python_executable: /opt/hermes-agent/venv/bin/python
         config_path: /home/operator/.hermes/config.yaml
@@ -157,11 +158,29 @@ sources:
         consumer_platform: cli
 ```
 
-Use the Python interpreter from the deployed Hermes runtime environment rather than an unrelated system interpreter. The projector imports Hermes' current skill loader, so matching the runtime interpreter avoids false missing-dependency or plugin-import failures.
+`mode: remote` is the default and uses the live bounded Hermes projection. Use the Python interpreter from the deployed Hermes runtime environment rather than an unrelated system interpreter. The projector imports Hermes' current skill loader, so matching the runtime interpreter avoids false missing-dependency or plugin-import failures.
+
+A standby that must serve the last accepted semantic skill state without contacting Hermes can use snapshot mode instead:
+
+```yaml
+sources:
+  skills:
+    - id: hermes
+      type: hermes
+      path: /sources/hermes-snapshot/current/skills
+      additional_paths:
+        - /sources/hermes-snapshot/current/workspace-skills
+      os_platform: linux
+      state:
+        mode: snapshot
+        snapshot_path: /sources/hermes-snapshot/current/state.json
+```
+
+Snapshot mode is mutually exclusive with the remote projection fields. The state file is content-bound and revision-bound; Hypershell Reach recomputes the local semantic content fingerprint before accepting it.
 
 Skill IDs are source-qualified, so the same bare skill name can exist in different sources without shadowing. Within one source a duplicate bare skill name is rejected.
 
-A Hermes source requires a bounded state projection target. The content path is read locally; the projection executes only the Hypershell Reach-owned read-only projector over the configured target and returns a sanitized effective catalog. See [Skills](skills.md).
+A Hermes source requires either a bounded remote state projection or a local verified snapshot state. Remote mode executes only the Hypershell Reach-owned read-only projector over the configured target and returns a sanitized effective catalog. Snapshot mode performs no Hermes network call and accepts state only when source ID, schema, canonical revision and local semantic content fingerprint match. See [Skills](skills.md).
 
 ## Local validation
 
