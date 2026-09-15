@@ -6,6 +6,7 @@ Hypershell Reach reads YAML from the path in `REACH_CONFIG`. Configuration is de
 
 ```yaml
 schema_version: 1
+topology: {}  # optional for standalone deployments
 workspace: {}
 defaults: {}
 executor: {}
@@ -14,6 +15,18 @@ targets: {}
 ```
 
 Unknown fields fail validation.
+
+## Topology
+
+```yaml
+topology:
+  node_id: home
+  primary_node_id: home
+```
+
+`topology` is an optional declarative deployment identity. `node_id` identifies the local Reach node and `primary_node_id` names the configured normal primary. Both use the same stable lowercase ID syntax as target IDs. Reach derives the local role as `primary` when both IDs match and `standby` otherwise, and exposes that safe metadata through `/api/v1/summary` when topology is configured.
+
+This contract does not add peer discovery, leader election, automatic failover, state replication or distributed coordination. Routing and recovery remain deployment/consumer responsibilities, and omitting `topology` preserves standalone deployments.
 
 ## Workspace
 

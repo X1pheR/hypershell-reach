@@ -1095,10 +1095,18 @@ def create_app(config: ReachConfig) -> Starlette:
             "tasks": len(model.task_summaries(limit=500)),
             "runs": model.run_count(),
         }
-        return JSONResponse(
-            {"product": "Hypershell Reach", "status": "ok", "counts": counts},
-            headers={"Cache-Control": "no-store"},
-        )
+        payload: dict[str, Any] = {"product": "Hypershell Reach", "status": "ok", "counts": counts}
+        if config.topology is not None:
+            payload["topology"] = {
+                "node_id": config.topology.node_id,
+                "primary_node_id": config.topology.primary_node_id,
+                "role": (
+                    "primary"
+                    if config.topology.node_id == config.topology.primary_node_id
+                    else "standby"
+                ),
+            }
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
     def api_skills(_: Request) -> Response:
         skills, _reports = model.skills()

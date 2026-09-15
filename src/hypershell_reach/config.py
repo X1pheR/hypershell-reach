@@ -267,10 +267,25 @@ class Target(BaseModel):
         return self
 
 
+class Topology(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1, max_length=63)
+    primary_node_id: str = Field(min_length=1, max_length=63)
+
+    @field_validator("node_id", "primary_node_id")
+    @classmethod
+    def validate_node_ids(cls, value: str) -> str:
+        if not _TARGET_ID.fullmatch(value):
+            raise ValueError("invalid topology node ID")
+        return value
+
+
 class ReachConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1]
+    topology: Topology | None = None
     workspace: Workspace
     defaults: Defaults = Field(default_factory=Defaults)
     executor: ExecutorConfig = Field(default_factory=ExecutorConfig)

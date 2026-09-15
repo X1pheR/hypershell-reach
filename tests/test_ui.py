@@ -605,6 +605,21 @@ def test_wp6_structured_candidate_detail_fails_closed_when_store_is_not_configur
     assert response.text == "Structured Candidate detail is not available."
 
 
+def test_read_only_api_exposes_topology_when_configured(tmp_path) -> None:
+    config = _config(tmp_path)
+    payload = config.model_dump()
+    payload["topology"] = {"node_id": "oci", "primary_node_id": "home"}
+    client = TestClient(create_app(ReachConfig.model_validate(payload)))
+
+    summary = client.get("/api/v1/summary")
+    assert summary.status_code == 200
+    assert summary.json()["topology"] == {
+        "node_id": "oci",
+        "primary_node_id": "home",
+        "role": "standby",
+    }
+
+
 def test_read_only_api_exposes_bounded_product_inventory(tmp_path) -> None:
     client = _client(tmp_path)
 

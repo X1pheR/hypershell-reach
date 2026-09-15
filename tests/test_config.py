@@ -244,6 +244,22 @@ def test_candidate_workspace_path_is_optional_and_must_be_absolute() -> None:
         ReachConfig.model_validate(payload)
 
 
+def test_topology_is_optional_and_uses_stable_node_ids() -> None:
+    config = ReachConfig.model_validate(_config())
+    assert config.topology is None
+
+    payload = _config()
+    payload["topology"] = {"node_id": "home", "primary_node_id": "home"}
+    config = ReachConfig.model_validate(payload)
+    assert config.topology is not None
+    assert config.topology.node_id == "home"
+    assert config.topology.primary_node_id == "home"
+
+    payload["topology"]["node_id"] = "Home Reach"
+    with pytest.raises(ValidationError, match="invalid topology node ID"):
+        ReachConfig.model_validate(payload)
+
+
 def test_synchronous_timeout_can_be_stricter_than_execution_timeout() -> None:
     payload = _config()
     payload["defaults"] = {
