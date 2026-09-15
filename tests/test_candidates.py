@@ -16,7 +16,7 @@ def candidate_payload(candidate_id: str = "ATR-022") -> dict:
         "problem": {
             "summary": "Repeated OIDC migrations require the same preflight checks.",
             "cause": "The checks are currently reconstructed ad hoc for each migration.",
-            "recurrence": "The same sequence has been needed across multiple OIDC integrations.",
+            "recurrence_count": 1,
             "evidence": ["Repeated operator workflow with deterministic preconditions."],
         },
         "proposal": {
@@ -116,6 +116,74 @@ def test_candidate_store_create_get_and_yaml_roundtrip(tmp_path) -> None:
     assert loaded == created
     assert (tmp_path / "candidates" / "ATR-022.yaml").is_file()
     assert loaded.revision == 1
+
+
+def test_candidate_recurrence_count_starts_at_one_and_rejects_zero() -> None:
+    record = CandidateRecord.model_validate(candidate_payload())
+    assert record.problem.recurrence_count == 1
+
+    payload = candidate_payload()
+    payload["problem"]["recurrence_count"] = 0
+    with pytest.raises(ValidationError):
+        CandidateRecord.model_validate(payload)
+
+
+def test_legacy_recurrence_text_remains_readable_with_count_one() -> None:
+    payload = candidate_payload()
+    payload["problem"].pop("recurrence_count")
+    payload["problem"]["recurrence"] = "Historical free-text recurrence evidence."
+
+    record = CandidateRecord.model_validate(payload)
+
+    assert record.problem.recurrence_count == 1
+    assert record.problem.recurrence == "Historical free-text recurrence evidence."
+
+
+def test_candidate_store_create_requires_first_occurrence_count_one(tmp_path) -> None:
+    store = CandidateStore(tmp_path / "candidates")
+    payload = candidate_payload()
+    problem = CandidateProblem.model_validate({**payload["problem"], "recurrence_count": 2})
+
+    with pytest.raises(ValueError, match="new candidate recurrence_count must be 1"):
+        store.create(
+            candidate_id=payload["id"],
+            title=payload["title"],
+            problem=problem,
+            proposal=CandidateProposal.model_validate(payload["proposal"]),
+            ownership=CandidateOwnership.model_validate(payload["ownership"]),
+            promotion_rationale=payload["promotion"]["rationale"],
+        )
+
+
+def test_candidate_store_record_occurrence_increments_count_and_revision(tmp_path) -> None:
+    store = CandidateStore(tmp_path / "candidates")
+    created = create_candidate(store)
+
+    updated = store.record_occurrence(created.id, expected_revision=1)
+
+    assert updated.problem.recurrence_count == 2
+    assert updated.revision == 2
+    assert store.get(created.id).problem.recurrence_count == 2
+
+
+def test_candidate_store_record_occurrence_rejects_stale_revision(tmp_path) -> None:
+    store = CandidateStore(tmp_path / "candidates")
+    created = create_candidate(store)
+    store.record_occurrence(created.id, expected_revision=created.revision)
+
+    with pytest.raises(ValueError, match="stale candidate revision"):
+        store.record_occurrence(created.id, expected_revision=created.revision)
+
+
+def test_candidate_content_update_cannot_change_recurrence_count(tmp_path) -> None:
+    store = CandidateStore(tmp_path / "candidates")
+    created = create_candidate(store)
+    observed = store.record_occurrence(created.id, expected_revision=created.revision)
+
+    for changed_count in (1, 3):
+        changed = observed.problem.model_copy(update={"recurrence_count": changed_count})
+        with pytest.raises(ValueError, match="use record_occurrence"):
+            store.update(observed.id, expected_revision=observed.revision, problem=changed)
 
 
 def test_candidate_store_rejects_stale_expected_revision(tmp_path) -> None:

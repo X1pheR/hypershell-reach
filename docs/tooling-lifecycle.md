@@ -1,19 +1,18 @@
 # Tooling Lifecycle
 
-Hypershell Reach should reduce repeated operational friction without turning every incident into permanent machinery.
+Hypershell Reach should capture material automation opportunities early without turning every observation into permanent machinery.
 
 ## Intake flow
 
-1. Describe the observed failure or friction and its reproducible signature.
-2. Fix isolated mistakes locally without adding reusable machinery.
-3. If the issue is recurring or generalizable, record evidence in the deployment's failure registry or equivalent governed evidence store.
-4. Check whether an existing structured MCP capability already solves the problem.
-5. Check whether an existing Hypershell Reach managed tool or configured private deployment tool solves it.
-6. Check whether the narrow owning application or domain already provides a suitable operator helper.
-7. Extend the narrowest existing capability when that remains simpler than adding another tool.
-8. Create a new reusable tool or helper only when the earlier options are insufficient.
-9. Add tests, documentation, safety metadata and deterministic postconditions.
-10. Reclassify the recorded gap after acceptance so future agents know whether it is still observed, guarded, automated or retired.
+1. Describe the observed failure, friction or manual reasoning path and its reproducible signature.
+2. Check whether an existing structured MCP capability, Reach managed tool or narrow owner already solves it. A missed existing path is not a new Candidate.
+3. Check the current structured Candidates for the same underlying gap.
+4. If the gap is already represented, record exactly one new distinct occurrence with `record_candidate_occurrence`; re-reviewing the same incident does not increment it.
+5. If the gap is material and not yet represented, create a Candidate immediately. The first observed occurrence is `recurrence_count: 1`; recurrence is evidence, never an intake gate.
+6. Fix isolated mistakes locally when appropriate, but preserve a separately useful automation opportunity as a Candidate even when the immediate incident is already resolved.
+7. During later review, prefer extending the narrowest existing capability over adding another tool. Create a new reusable tool or helper only when existing owners are insufficient.
+8. Add tests, documentation, safety metadata and deterministic postconditions before implementation is accepted.
+9. Reclassify the Candidate after review/acceptance so future agents can distinguish proposed, approved, blocked, not-warranted, implemented and automated work.
 
 ## Ownership
 
@@ -28,9 +27,8 @@ Use `private deployment` rather than a project-specific deployment name in gener
 
 ## Promotion criteria
 
-A recorded gap is a strong promotion candidate when all of these are true:
+A recorded Candidate is strong enough for implementation review when all of these are true:
 
-- the same failure or workaround has occurred more than once, or there is strong evidence it will recur;
 - the cause is understood well enough to prevent rather than merely mask it;
 - the lesson applies beyond one typo, malformed command or temporary incident;
 - a deterministic preflight, response or postcondition can be defined;
@@ -38,13 +36,17 @@ A recorded gap is a strong promotion candidate when all of these are true:
 - the narrow owner is clear;
 - automation reduces meaningful risk, repetition or ambiguity rather than only saving a few keystrokes.
 
-Promotion remains a reviewed decision. A registry can surface candidates automatically, but it should not automatically implement every candidate.
+`recurrence_count` is a prioritization signal, not a promotion threshold. A count of `1` may still justify implementation when the observed work is expensive, risky or highly generalizable; a high count makes repeated cost visible without forcing an arbitrary threshold.
+
+Candidate capture may be automatic when the observation is material and sufficiently specified. Promotion remains a reviewed decision: creating or incrementing a Candidate never approves implementation.
 
 ## Candidate lifecycle
 
 Hypershell Reach owns Candidate **state mechanics**, not source-code generation, Git workflow, or authorization policy. Candidate records are structured YAML state when `workspace.candidates` is configured; managed-tool source remains in the owning product or deployment repository.
 
-A Candidate must preserve enough intent to survive chat loss: recurring problem, cause and evidence; proposed capability and optional managed-tool ID; required inputs and expected outputs; safety/mutation boundary; stable owner ID; deterministic acceptance postconditions; promotion rationale; and optional implementation Task/final capability references. Candidate state must not contain credential or secret values.
+A Candidate must preserve enough intent to survive chat loss: problem, cause and evidence; monotonic `recurrence_count`; proposed capability and optional managed-tool ID; required inputs and expected outputs; safety/mutation boundary; stable owner ID; deterministic acceptance postconditions; promotion rationale; and optional implementation Task/final capability references. Candidate state must not contain credential or secret values.
+
+`recurrence_count` starts at `1` for a newly captured observed opportunity. Increment it exactly once for each later independently observed occurrence of the same underlying gap. Reopening a chat, rerunning closure, retrying a failed write or re-evaluating the same incident is not another occurrence. The optional legacy free-text `recurrence` field remains readable for existing Candidate v1 records but is not required for new intake and must not be converted into an invented historical count.
 
 The state set is intentionally small: `candidate`, `approved`, `blocked`, `not-warranted`, `implemented`, and `automated`. `approved` means an operator has explicitly authorized implementation. The existence of `approve_candidate` never grants that authorization; callers must establish it outside Hypershell Reach before invoking the transition. Generic `update_candidate` cannot change lifecycle state.
 

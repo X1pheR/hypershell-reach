@@ -599,6 +599,7 @@ def create_app(config: ReachConfig) -> Starlette:
             (
                 ("title", "Title"),
                 ("status", "Status"),
+                ("recurrence_count", "Occurrences"),
                 ("promotion_reason", "Promotion reason"),
                 ("id", "ID"),
             ),
@@ -946,12 +947,13 @@ def create_app(config: ReachConfig) -> Starlette:
 
         content = '<div class="section-stack">' + _panel(
             "Problem",
-            "The recurring bounded gap this Candidate is intended to address.",
+            "The bounded automation opportunity this Candidate is intended to address.",
             _details(
                 (
                     ("summary", "Summary", problem.get("summary")),
                     ("cause", "Cause", problem.get("cause")),
-                    ("recurrence", "Recurrence", problem.get("recurrence")),
+                    ("recurrence_count", "Occurrences", problem.get("recurrence_count")),
+                    ("recurrence", "Legacy recurrence context", problem.get("recurrence")),
                 )
             ) + '<h3>Evidence</h3>' + _text_list(problem.get("evidence") or []),
         ) + _panel(

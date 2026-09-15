@@ -133,7 +133,7 @@ title: Browser WP6 structured candidate
 problem:
   summary: Repeated product review needs exact provenance navigation.
   cause: List-only views hide decision context.
-  recurrence: The relationship is reviewed across Tasks, Runs and Candidates.
+  recurrence_count: 3
   evidence:
     - WP6 requires exact read-only deep links.
 proposal:

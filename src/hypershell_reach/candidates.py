@@ -35,7 +35,8 @@ class CandidateProblem(BaseModel):
 
     summary: BoundedCandidateText
     cause: BoundedCandidateText
-    recurrence: BoundedCandidateText
+    recurrence_count: int = Field(default=1, ge=1)
+    recurrence: BoundedCandidateText | None = None
     evidence: list[Annotated[str, Field(min_length=1, max_length=1_000)]] = Field(
         min_length=1, max_length=20
     )
@@ -277,6 +278,8 @@ class CandidateStore:
         promotion_rationale: str,
     ) -> CandidateRecord:
         self._require_writable()
+        if problem.recurrence_count != 1:
+            raise ValueError("new candidate recurrence_count must be 1")
         with self._lock(candidate_id):
             path = self._path(candidate_id)
             if path.exists():
@@ -349,6 +352,8 @@ class CandidateStore:
             if title is not None:
                 changes["title"] = title
             if problem is not None:
+                if problem.recurrence_count != current.problem.recurrence_count:
+                    raise ValueError("candidate recurrence_count cannot change through update; use record_occurrence")
                 changes["problem"] = problem
             if proposal is not None:
                 changes["proposal"] = proposal
@@ -359,6 +364,34 @@ class CandidateStore:
                     update={"rationale": promotion_rationale}
                 )
             updated = CandidateRecord.model_validate(current.model_copy(update=changes).model_dump())
+            self._atomic_write(updated)
+            return updated
+
+    def record_occurrence(
+        self,
+        candidate_id: str,
+        *,
+        expected_revision: int,
+    ) -> CandidateRecord:
+        self._require_writable()
+        with self._lock(candidate_id):
+            current = self.get(candidate_id)
+            if current.revision != expected_revision:
+                raise ValueError(
+                    f"stale candidate revision: expected {expected_revision}, current {current.revision}"
+                )
+            problem = current.problem.model_copy(
+                update={"recurrence_count": current.problem.recurrence_count + 1}
+            )
+            updated = CandidateRecord.model_validate(
+                current.model_copy(
+                    update={
+                        "revision": current.revision + 1,
+                        "problem": problem,
+                        "updated_at": _utc_timestamp(),
+                    }
+                ).model_dump()
+            )
             self._atomic_write(updated)
             return updated
 

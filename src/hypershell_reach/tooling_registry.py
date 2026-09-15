@@ -139,7 +139,6 @@ class ToolingRegistry:
         missing = [
             "problem.summary",
             "problem.cause",
-            "problem.recurrence",
             "problem.evidence",
             "proposal.required_inputs",
             "proposal.expected_outputs",

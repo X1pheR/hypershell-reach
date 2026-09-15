@@ -171,11 +171,15 @@ Read Hypershell Reach-owned Candidate YAML state when `workspace.candidates` is 
 
 ### `create_candidate`
 
-Creates revision `1` with state `candidate`. Required proposal content includes problem/cause/recurrence/evidence, capability, typed input/output descriptions, safety boundary, acceptance postconditions, ownership and promotion rationale. There is no arbitrary document mutation API.
+Creates revision `1` with state `candidate`. The first observed opportunity has `problem.recurrence_count=1` by default. Required proposal content includes problem/cause/evidence, capability, typed input/output descriptions, safety boundary, acceptance postconditions, ownership and promotion rationale. The optional legacy free-text `problem.recurrence` remains readable for existing Candidate v1 records but is not required for new intake. There is no arbitrary document mutation API.
 
 ### `update_candidate`
 
-Updates proposal content only and requires `expected_revision`. Lifecycle state is deliberately absent from this input contract, so approval cannot be smuggled through a generic update.
+Updates proposal content only and requires `expected_revision`. Generic content updates must preserve `problem.recurrence_count`; only `record_candidate_occurrence` may increment it. Lifecycle state is deliberately absent from this input contract, so approval cannot be smuggled through a generic update.
+
+### `record_candidate_occurrence`
+
+Records exactly one later distinct observed occurrence of the same underlying gap by atomically incrementing `problem.recurrence_count` and the Candidate revision. It requires `expected_revision`, is intentionally non-idempotent, changes no proposal/lifecycle fields and does not authorize implementation. Re-reviewing or retrying the same incident is not another occurrence; callers must not invoke it merely because closure or analysis ran again.
 
 ### `approve_candidate`
 
