@@ -139,6 +139,86 @@ def test_legacy_recurrence_text_remains_readable_with_count_one() -> None:
     assert record.problem.recurrence == "Historical free-text recurrence evidence."
 
 
+def test_candidate_store_auto_id_uses_separate_collision_safe_namespace(tmp_path) -> None:
+    store = CandidateStore(tmp_path / "candidates")
+    payload = candidate_payload()
+
+    created = store.create(
+        candidate_id=None,
+        title=payload["title"],
+        problem=CandidateProblem.model_validate(payload["problem"]),
+        proposal=CandidateProposal.model_validate(payload["proposal"]),
+        ownership=CandidateOwnership.model_validate(payload["ownership"]),
+        promotion_rationale=payload["promotion"]["rationale"],
+    )
+
+    assert created.id.startswith("CAN-")
+    assert len(created.id) == 36
+    assert all(character in "0123456789ABCDEF" for character in created.id[4:])
+    assert store.get(created.id) == created
+
+
+def test_candidate_store_auto_id_retries_real_collision(tmp_path, monkeypatch) -> None:
+    import hypershell_reach.candidates as candidates_module
+
+    store = CandidateStore(tmp_path / "candidates")
+    first = "CAN-" + "A" * 32
+    create_candidate(store, first)
+    generated = iter(["CAN-" + "A" * 32, "CAN-" + "B" * 32])
+    monkeypatch.setattr(candidates_module, "_generated_candidate_id", lambda: next(generated))
+    payload = candidate_payload()
+
+    created = store.create(
+        candidate_id=None,
+        title=payload["title"],
+        problem=CandidateProblem.model_validate(payload["problem"]),
+        proposal=CandidateProposal.model_validate(payload["proposal"]),
+        ownership=CandidateOwnership.model_validate(payload["ownership"]),
+        promotion_rationale=payload["promotion"]["rationale"],
+    )
+
+    assert created.id == "CAN-" + "B" * 32
+    assert store.get(first).id == first
+
+
+def test_concurrent_auto_id_creation_retries_shared_collision(tmp_path, monkeypatch) -> None:
+    import hypershell_reach.candidates as candidates_module
+    from threading import Lock
+
+    root = tmp_path / "candidates"
+    store_a = CandidateStore(root)
+    store_b = CandidateStore(root)
+    generated = iter([
+        "CAN-" + "A" * 32,
+        "CAN-" + "A" * 32,
+        "CAN-" + "B" * 32,
+    ])
+    guard = Lock()
+
+    def next_id() -> str:
+        with guard:
+            return next(generated)
+
+    monkeypatch.setattr(candidates_module, "_generated_candidate_id", next_id)
+    payload = candidate_payload()
+
+    def create(store: CandidateStore) -> str:
+        return store.create(
+            candidate_id=None,
+            title=payload["title"],
+            problem=CandidateProblem.model_validate(payload["problem"]),
+            proposal=CandidateProposal.model_validate(payload["proposal"]),
+            ownership=CandidateOwnership.model_validate(payload["ownership"]),
+            promotion_rationale=payload["promotion"]["rationale"],
+        ).id
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ids = set(pool.map(create, (store_a, store_b)))
+
+    assert ids == {"CAN-" + "A" * 32, "CAN-" + "B" * 32}
+    assert {record.id for record in store_a.list()} == ids
+
+
 def test_candidate_store_create_requires_first_occurrence_count_one(tmp_path) -> None:
     store = CandidateStore(tmp_path / "candidates")
     payload = candidate_payload()

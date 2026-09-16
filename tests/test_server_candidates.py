@@ -157,6 +157,22 @@ async def test_candidate_mcp_lifecycle_is_typed_and_approval_is_dedicated(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_create_candidate_can_allocate_collision_safe_id_when_omitted(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    _install_stores(tmp_path, monkeypatch, config)
+    payload = _create_input()
+    payload.pop("candidate_id")
+
+    created = json.loads((await server.call_tool("create_candidate", payload))[0].text)
+
+    assert created["id"].startswith("CAN-")
+    assert len(created["id"]) == 36
+    assert created["problem"]["recurrence_count"] == 1
+    schema = server.CreateCandidateInput.model_json_schema()
+    assert "candidate_id" not in schema.get("required", [])
+
+
+@pytest.mark.asyncio
 async def test_record_candidate_occurrence_increments_only_recurrence_count(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     _install_stores(tmp_path, monkeypatch, config)

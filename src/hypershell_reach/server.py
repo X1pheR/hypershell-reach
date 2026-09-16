@@ -246,7 +246,7 @@ class GetCandidateInput(BaseModel):
 class CreateCandidateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    candidate_id: str = Field(min_length=2, max_length=64)
+    candidate_id: str | None = Field(default=None, min_length=2, max_length=64)
     title: str = Field(min_length=1, max_length=200)
     problem: CandidateProblem
     proposal: CandidateProposal
@@ -725,7 +725,8 @@ async def list_tools() -> list[types.Tool]:
             name="create_candidate",
             description=(
                 "Create one structured Candidate proposal for its first observed occurrence; "
-                "problem.recurrence_count must be 1. This records evidence and does not authorize implementation."
+                "problem.recurrence_count must be 1. Omit candidate_id to allocate a collision-safe "
+                "CAN-* ID server-side. This records evidence and does not authorize implementation."
             ),
             inputSchema=CreateCandidateInput.model_json_schema(),
             annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),

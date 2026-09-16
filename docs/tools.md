@@ -171,6 +171,8 @@ Read Hypershell Reach-owned Candidate YAML state when `workspace.candidates` is 
 
 ### `create_candidate`
 
+When `candidate_id` is omitted, Reach allocates a collision-safe `CAN-<32 hex>` ID server-side. Explicit IDs remain supported for controlled migration and operator-authored records.
+
 Creates revision `1` with state `candidate`. The first observed opportunity has `problem.recurrence_count=1` by default. Required proposal content includes problem/cause/evidence, capability, typed input/output descriptions, safety boundary, acceptance postconditions, ownership and promotion rationale. The optional legacy free-text `problem.recurrence` remains readable for existing Candidate v1 records but is not required for new intake. There is no arbitrary document mutation API.
 
 ### `update_candidate`

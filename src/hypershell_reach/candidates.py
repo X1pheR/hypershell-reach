@@ -173,6 +173,10 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
+def _generated_candidate_id() -> str:
+    return f"CAN-{uuid4().hex.upper()}"
+
+
 _ALLOWED_TRANSITIONS: dict[CandidateState, set[CandidateState]] = {
     "candidate": {"approved", "blocked", "not-warranted"},
     "approved": {"blocked", "not-warranted", "implemented", "automated"},
@@ -270,7 +274,7 @@ class CandidateStore:
     def create(
         self,
         *,
-        candidate_id: str,
+        candidate_id: str | None,
         title: str,
         problem: CandidateProblem,
         proposal: CandidateProposal,
@@ -280,6 +284,23 @@ class CandidateStore:
         self._require_writable()
         if problem.recurrence_count != 1:
             raise ValueError("new candidate recurrence_count must be 1")
+        if candidate_id is None:
+            for _ in range(32):
+                generated_id = _generated_candidate_id()
+                try:
+                    return self.create(
+                        candidate_id=generated_id,
+                        title=title,
+                        problem=problem,
+                        proposal=proposal,
+                        ownership=ownership,
+                        promotion_rationale=promotion_rationale,
+                    )
+                except ValueError as exc:
+                    if str(exc) == f"candidate already exists: {generated_id}":
+                        continue
+                    raise
+            raise RuntimeError("unable to allocate unique candidate ID after 32 attempts")
         with self._lock(candidate_id):
             path = self._path(candidate_id)
             if path.exists():
