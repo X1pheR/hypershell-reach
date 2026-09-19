@@ -88,6 +88,140 @@ async def test_submission_connection_can_close_before_job_finishes(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_async_submission_persists_declared_result_ref(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+
+    async def fake_run_ssh(**kwargs):
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "not persisted", "bytes": 13, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(executor, "run_ssh", fake_run_ssh)
+    service = executor.ExecutorService(config)
+    await service.start()
+    try:
+        submission = _submission().model_copy(
+            update={"result_ref": "reports/async-result.json"}
+        )
+        accepted = await executor.submit_execution(config, submission)
+        await service.wait_for_idle()
+        record = service.store.get(accepted["run_id"])
+        assert record.result_ref == "reports/async-result.json"
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_heavy_async_submission_respects_target_limit(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    config.targets["example"].max_heavy_concurrency = 1
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run_ssh(**kwargs):
+        started.set()
+        await release.wait()
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "", "bytes": 0, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(executor, "run_ssh", fake_run_ssh)
+    service = executor.ExecutorService(config)
+    await service.start()
+    try:
+        heavy = _submission().model_copy(update={"execution_class": "heavy"})
+        first = service.submit(heavy)
+        await started.wait()
+
+        with pytest.raises(RuntimeError, match="heavy execution limit"):
+            service.submit(heavy)
+
+        release.set()
+        await service.wait_for_idle()
+        assert service.store.get(first["run_id"]).status == "succeeded"
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_heavy_async_submission_is_unrestricted_when_target_has_no_limit(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    started = 0
+    both_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal started
+        started += 1
+        if started == 2:
+            both_started.set()
+        await release.wait()
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "", "bytes": 0, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(executor, "run_ssh", fake_run_ssh)
+    service = executor.ExecutorService(config)
+    await service.start()
+    try:
+        heavy = _submission().model_copy(update={"execution_class": "heavy"})
+        service.submit(heavy)
+        service.submit(heavy)
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        release.set()
+        await service.wait_for_idle()
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_completed_async_task_without_terminal_run_reconciles_ownership_loss(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    service = executor.ExecutorService(config)
+    await service.start()
+    try:
+        async def fake_execute(run_id, submission):
+            return None
+
+        monkeypatch.setattr(service, "_execute", fake_execute)
+        accepted = await executor.submit_execution(config, _submission())
+
+        for _ in range(100):
+            record = service.store.get(accepted["run_id"])
+            if record.status != "running":
+                break
+            await asyncio.sleep(0.01)
+
+        assert record.status == "unknown"
+        assert record.error_type == "ExecutorOwnershipLost"
+        assert record.ambiguous is False
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
 async def test_explicit_cancellation_is_deterministic_and_idempotent(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     started = asyncio.Event()

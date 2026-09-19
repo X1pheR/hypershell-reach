@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import signal
 import time
@@ -8,6 +9,47 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Target
+from .runs import RunExecutionClass
+
+
+@dataclass
+class ExecutionLease:
+    fd: int
+    released: bool = False
+
+    def release(self) -> None:
+        if self.released:
+            return
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.fd)
+            self.released = True
+
+
+def acquire_execution_lease(
+    root: str | Path,
+    *,
+    target_id: str,
+    execution_class: RunExecutionClass,
+    max_heavy_concurrency: int | None,
+) -> ExecutionLease | None:
+    if execution_class != "heavy" or max_heavy_concurrency is None:
+        return None
+
+    lease_root = Path(root)
+    lease_root.mkdir(parents=True, exist_ok=True, mode=0o750)
+    for slot in range(max_heavy_concurrency):
+        path = lease_root / f".heavy-{target_id}-{slot}.lock"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            continue
+        return ExecutionLease(fd)
+
+    raise RuntimeError(f"heavy execution limit reached for target {target_id}")
 
 
 @dataclass(frozen=True)

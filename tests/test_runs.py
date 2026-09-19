@@ -47,6 +47,59 @@ def test_run_record_excludes_execution_content(tmp_path) -> None:
     assert finished.idempotent is None
 
 
+def test_run_persists_execution_class_for_observability(tmp_path) -> None:
+    store = RunStore(tmp_path)
+    record = store.create(
+        operation="run_command",
+        target="laptop",
+        timeout_seconds=30,
+        may_mutate=False,
+        execution_class="heavy",
+    )
+    restored = store.get(record.id)
+
+    assert restored.execution_class == "heavy"
+    assert restored.summary()["execution_class"] == "heavy"
+
+
+def test_run_persists_bounded_result_ref_without_output_content(tmp_path) -> None:
+    store = RunStore(tmp_path)
+    record = store.create(
+        operation="run_command",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=False,
+        result_ref="reports/local-llm-wp1/result.json",
+    )
+    finished = store.finish(record.id, _execution())
+    payload = (tmp_path / f"{record.id}.json").read_text(encoding="utf-8")
+
+    assert finished.result_ref == "reports/local-llm-wp1/result.json"
+    assert finished.summary()["result_ref"] == "reports/local-llm-wp1/result.json"
+    assert "secret output" not in payload
+    assert '"result_ref": "reports/local-llm-wp1/result.json"' in payload
+
+
+def test_historical_v3_run_without_result_ref_remains_readable(tmp_path) -> None:
+    store = RunStore(tmp_path)
+    record = store.create(
+        operation="run_command",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=False,
+        result_ref="reports/example.json",
+    )
+    path = tmp_path / f"{record.id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 3
+    payload.pop("result_ref")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = store.get(record.id)
+    assert restored.schema_version == 3
+    assert restored.result_ref is None
+
+
 def test_managed_run_persists_declared_idempotency(tmp_path) -> None:
     store = RunStore(tmp_path)
     record = store.create(

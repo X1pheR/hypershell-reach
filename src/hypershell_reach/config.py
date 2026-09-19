@@ -279,6 +279,7 @@ class Target(BaseModel):
     max_timeout_seconds: int | None = Field(default=None, ge=1, le=900)
     max_synchronous_timeout_seconds: int | None = Field(default=None, ge=1, le=900)
     max_output_bytes: int | None = Field(default=None, ge=1_024, le=1_048_576)
+    max_heavy_concurrency: int | None = Field(default=None, ge=1, le=16)
     ssh: SSHConfig
 
     @field_validator("capabilities")

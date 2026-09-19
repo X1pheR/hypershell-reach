@@ -24,13 +24,15 @@ RunStatus = Literal[
 ]
 RunOperation = Literal["run_command", "run_shell", "run_script"]
 RunExecutionMode = Literal["sync", "async"]
+RunExecutionClass = Literal["normal", "heavy"]
 
 _RUN_ID = re.compile(r"^run-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _TERMINAL_CLEANUP_STATUSES = {"succeeded", "remote_error", "transport_error", "timeout", "local_error"}
 _AMBIGUOUS_STATUSES = {"transport_error", "timeout", "interrupted", "unknown"}
-RUN_SCHEMA_VERSION = 3
+RUN_SCHEMA_VERSION = 4
 PURPOSE_MAX_LENGTH = 512
 RESULT_SUMMARY_MAX_LENGTH = 512
+RESULT_REF_MAX_LENGTH = 512
 RESULT_SUMMARY_TRUNCATION_SUFFIX = " [truncated]"
 
 
@@ -44,6 +46,19 @@ def normalize_run_purpose(value: str) -> str:
         raise ValueError(f"purpose must be at most {PURPOSE_MAX_LENGTH} characters")
     if not normalized.isprintable():
         raise ValueError("purpose must be a single printable line")
+    return normalized
+
+
+def normalize_result_ref(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("result_ref must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("result_ref must not be empty")
+    if len(normalized) > RESULT_REF_MAX_LENGTH:
+        raise ValueError(f"result_ref must be at most {RESULT_REF_MAX_LENGTH} characters")
+    if not normalized.isprintable():
+        raise ValueError("result_ref must be one printable line")
     return normalized
 
 
@@ -122,13 +137,15 @@ def new_run_id(now: datetime | None = None) -> str:
 class RunRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2, 3] = RUN_SCHEMA_VERSION
+    schema_version: Literal[1, 2, 3, 4] = RUN_SCHEMA_VERSION
     id: str
     operation: RunOperation
     target: str
     execution_mode: RunExecutionMode = "sync"
+    execution_class: RunExecutionClass = "normal"
     purpose: str | None = Field(default=None, min_length=1, max_length=PURPOSE_MAX_LENGTH, strict=True)
     result_summary: str | None = Field(default=None, max_length=RESULT_SUMMARY_MAX_LENGTH, strict=True)
+    result_ref: str | None = Field(default=None, max_length=RESULT_REF_MAX_LENGTH, strict=True)
     task_id: str | None = None
     script_id: str | None = None
     script_source: str | None = None
@@ -158,6 +175,13 @@ class RunRecord(BaseModel):
             return None
         return normalize_run_purpose(value)
 
+    @field_validator("result_ref", mode="before")
+    @classmethod
+    def validate_result_ref(cls, value: object) -> object:
+        if value is None:
+            return None
+        return normalize_result_ref(value)
+
     @field_validator("result_summary")
     @classmethod
     def validate_result_summary(cls, value: str | None) -> str | None:
@@ -171,6 +195,10 @@ class RunRecord(BaseModel):
             raise ValueError("Run schema v1 cannot contain purpose or result_summary")
         if self.schema_version < 3 and self.execution_mode != "sync":
             raise ValueError("Run schemas before v3 cannot contain async execution ownership")
+        if self.schema_version < 4 and self.result_ref is not None:
+            raise ValueError("Run schemas before v4 cannot contain result_ref")
+        if self.schema_version < 4 and self.execution_class != "normal":
+            raise ValueError("Run schemas before v4 cannot contain a non-default execution_class")
         return self
 
     def summary(self) -> dict[str, object]:
@@ -180,8 +208,10 @@ class RunRecord(BaseModel):
             "operation": self.operation,
             "target": self.target,
             "execution_mode": self.execution_mode,
+            "execution_class": self.execution_class,
             "purpose": self.purpose,
             "result_summary": self.result_summary,
+            "result_ref": self.result_ref,
             "task_id": self.task_id,
             "script_id": self.script_id,
             "may_mutate": self.may_mutate,
@@ -244,6 +274,9 @@ class RunStore:
             serialized.pop("result_summary", None)
         if record.schema_version < 3:
             serialized.pop("execution_mode", None)
+        if record.schema_version < 4:
+            serialized.pop("result_ref", None)
+            serialized.pop("execution_class", None)
         payload = json.dumps(serialized, indent=2, sort_keys=True) + "\n"
         try:
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -273,7 +306,9 @@ class RunStore:
         timeout_seconds: int,
         may_mutate: bool,
         execution_mode: RunExecutionMode = "sync",
+        execution_class: RunExecutionClass = "normal",
         purpose: str | None = None,
+        result_ref: str | None = None,
         idempotent: bool | None = None,
         task_id: str | None = None,
         script_id: str | None = None,
@@ -288,7 +323,9 @@ class RunStore:
             operation=operation,
             target=target,
             execution_mode=execution_mode,
+            execution_class=execution_class,
             purpose=purpose,
+            result_ref=result_ref,
             task_id=task_id,
             script_id=script_id,
             script_source=script_source,

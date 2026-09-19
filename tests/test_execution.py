@@ -5,7 +5,13 @@ import asyncio
 import pytest
 
 from hypershell_reach.config import Target
-from hypershell_reach.execution import _read_bounded, _redact, build_ssh_argv, classify_status
+from hypershell_reach.execution import (
+    _read_bounded,
+    _redact,
+    acquire_execution_lease,
+    build_ssh_argv,
+    classify_status,
+)
 
 
 def _target() -> Target:
@@ -21,6 +27,45 @@ def _target() -> Target:
             },
         }
     )
+
+
+def test_heavy_execution_lease_serializes_only_configured_target(tmp_path) -> None:
+    first = acquire_execution_lease(
+        tmp_path,
+        target_id="laptop",
+        execution_class="heavy",
+        max_heavy_concurrency=1,
+    )
+    assert first is not None
+    try:
+        with pytest.raises(RuntimeError, match="heavy execution limit"):
+            acquire_execution_lease(
+                tmp_path,
+                target_id="laptop",
+                execution_class="heavy",
+                max_heavy_concurrency=1,
+            )
+
+        assert (
+            acquire_execution_lease(
+                tmp_path,
+                target_id="laptop",
+                execution_class="normal",
+                max_heavy_concurrency=1,
+            )
+            is None
+        )
+        assert (
+            acquire_execution_lease(
+                tmp_path,
+                target_id="docker",
+                execution_class="heavy",
+                max_heavy_concurrency=None,
+            )
+            is None
+        )
+    finally:
+        first.release()
 
 
 def test_ssh_argv_enforces_transport_boundary() -> None:

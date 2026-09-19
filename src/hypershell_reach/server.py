@@ -20,7 +20,7 @@ from .candidates import (
     CandidateStore,
 )
 from .config import ReachConfig, load_config
-from .execution import run_ssh
+from .execution import acquire_execution_lease, run_ssh
 from .executor import ExecutorService, ExecutionSubmission, cancel_execution, submit_execution
 from .hermes_snapshot import build_snapshot_payload, parse_snapshot_payload
 from .managed_tools import build_script_command, ensure_target_compatible, load_tool_registry
@@ -36,7 +36,16 @@ from .skills import (
     skill_sources_probe_unchanged,
     skill_sources_snapshot,
 )
-from .runs import PURPOSE_MAX_LENGTH, RunOperation, RunStatus, RunStore, normalize_run_purpose
+from .runs import (
+    PURPOSE_MAX_LENGTH,
+    RESULT_REF_MAX_LENGTH,
+    RunExecutionClass,
+    RunOperation,
+    RunStatus,
+    RunStore,
+    normalize_result_ref,
+    normalize_run_purpose,
+)
 from .tasks import TaskContinuity, TaskStatus, TaskStore
 from .tooling_registry import ToolingRegistry
 
@@ -60,6 +69,12 @@ PURPOSE_DESCRIPTION = (
     "credentials, tokens, or other secrets. One printable line, 1..512 characters after trimming."
 )
 
+RESULT_REF_DESCRIPTION = (
+    "Optional stable non-secret reference to the bounded report or state published by this "
+    "execution. Reach persists only this pointer, never referenced content. One printable line, "
+    "1..512 characters after trimming."
+)
+
 
 class AgentExecutionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -69,11 +84,28 @@ class AgentExecutionInput(BaseModel):
         max_length=PURPOSE_MAX_LENGTH,
         description=PURPOSE_DESCRIPTION,
     )
+    result_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=RESULT_REF_MAX_LENGTH,
+        description=RESULT_REF_DESCRIPTION,
+    )
+    execution_class: RunExecutionClass = Field(
+        default="normal",
+        description="Execution resource class. Use heavy only for workloads that should obey a target heavy-concurrency limit.",
+    )
 
     @field_validator("purpose", mode="before")
     @classmethod
     def validate_purpose(cls, value: object) -> object:
         return normalize_run_purpose(value)
+
+    @field_validator("result_ref", mode="before")
+    @classmethod
+    def validate_result_ref(cls, value: object) -> object:
+        if value is None:
+            return None
+        return normalize_result_ref(value)
 
 
 class EmptyInput(BaseModel):
@@ -426,6 +458,9 @@ async def _tracked_ssh_run(
     max_output_bytes: int,
     may_mutate: bool,
     purpose: str,
+    result_ref: str | None = None,
+    execution_class: RunExecutionClass = "normal",
+    lease_root: str | None = None,
     idempotent: bool | None = None,
     task_id: str | None = None,
     stdin_text: str | None = None,
@@ -434,42 +469,61 @@ async def _tracked_ssh_run(
     script_sha256: str | None = None,
     argument_names: list[str] | None = None,
 ) -> tuple[str, dict[str, object]]:
-    _prepare_task_execution(task_id=task_id, may_mutate=may_mutate, purpose=purpose)
-    store = _run_store()
-    record = store.create(
-        operation=operation,
-        target=target_id,
-        task_id=task_id,
-        script_id=script_id,
-        script_source=script_source,
-        script_sha256=script_sha256,
-        argument_names=argument_names,
-        timeout_seconds=timeout_seconds,
-        may_mutate=may_mutate,
-        purpose=purpose,
-        idempotent=idempotent,
-    )
-    try:
-        execution = await run_ssh(
+    lease = None
+    if execution_class == "heavy" and target.max_heavy_concurrency is not None:
+        lease = acquire_execution_lease(
+            lease_root or _config.workspace.runs,
             target_id=target_id,
-            target=target,
-            remote_command=remote_command,
-            timeout_seconds=timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-            max_output_bytes=max_output_bytes,
-            stdin_text=stdin_text,
+            execution_class=execution_class,
+            max_heavy_concurrency=target.max_heavy_concurrency,
         )
-    except asyncio.CancelledError:
-        store.interrupt(record.id)
-        raise
-    except (ValueError, RuntimeError) as exc:
-        store.fail_local(record.id, type(exc).__name__)
-        raise
-    except Exception as exc:
-        store.mark_unknown(record.id, type(exc).__name__)
-        raise
-    store.finish(record.id, execution)
-    return record.id, execution
+    try:
+        _prepare_task_execution(task_id=task_id, may_mutate=may_mutate, purpose=purpose)
+        store = _run_store()
+        record = store.create(
+            operation=operation,
+            target=target_id,
+            task_id=task_id,
+            script_id=script_id,
+            script_source=script_source,
+            script_sha256=script_sha256,
+            argument_names=argument_names,
+            timeout_seconds=timeout_seconds,
+            may_mutate=may_mutate,
+            execution_class=execution_class,
+            purpose=purpose,
+            result_ref=result_ref,
+            idempotent=idempotent,
+        )
+        try:
+            execution = await run_ssh(
+                target_id=target_id,
+                target=target,
+                remote_command=remote_command,
+                timeout_seconds=timeout_seconds,
+                connect_timeout_seconds=connect_timeout_seconds,
+                max_output_bytes=max_output_bytes,
+                stdin_text=stdin_text,
+            )
+        except asyncio.CancelledError:
+            store.interrupt(record.id)
+            raise
+        except (ValueError, RuntimeError) as exc:
+            store.fail_local(record.id, type(exc).__name__)
+            raise
+        except Exception as exc:
+            store.mark_unknown(record.id, type(exc).__name__)
+            raise
+        else:
+            store.finish(record.id, execution)
+            return record.id, execution
+        finally:
+            current = store.get(record.id)
+            if current.status == "running":
+                store.mark_unknown(record.id, error_type="ServerOwnershipLost")
+    finally:
+        if lease is not None:
+            lease.release()
 
 
 def _hermes_state_from_payload(
@@ -1253,6 +1307,7 @@ async def call_tool(
                         "max_timeout_seconds": _config.resolved_max_timeout(target),
                         "max_synchronous_timeout_seconds": _config.resolved_max_synchronous_timeout(target),
                         "max_output_bytes": _config.resolved_max_output(target),
+                        "max_heavy_concurrency": target.max_heavy_concurrency,
                     }
                     for target_id, target in sorted(_config.targets.items())
                 ]
@@ -1359,6 +1414,9 @@ async def call_tool(
                 max_output_bytes=max_output,
                 may_mutate=script.metadata.mutating,
                 purpose=args.purpose,
+                result_ref=args.result_ref,
+                execution_class=args.execution_class,
+                lease_root=_config.workspace.runs,
                 idempotent=script.metadata.idempotent,
                 task_id=args.task_id,
                 stdin_text=script.content,
@@ -1394,6 +1452,8 @@ async def call_tool(
                     stdin_text=script.content,
                     timeout_seconds=script.metadata.timeout_seconds,
                     purpose=args.purpose,
+                    result_ref=args.result_ref,
+                    execution_class=args.execution_class,
                     may_mutate=script.metadata.mutating,
                     idempotent=script.metadata.idempotent,
                     task_id=args.task_id,
@@ -1419,6 +1479,8 @@ async def call_tool(
                     remote_command=args.command,
                     timeout_seconds=args.timeout_seconds,
                     purpose=args.purpose,
+                    result_ref=args.result_ref,
+                    execution_class=args.execution_class,
                     may_mutate=True,
                     task_id=args.task_id,
                 ),
@@ -1438,6 +1500,9 @@ async def call_tool(
                 max_output_bytes=max_output,
                 may_mutate=True,
                 purpose=args.purpose,
+                result_ref=args.result_ref,
+                execution_class=args.execution_class,
+                lease_root=_config.workspace.runs,
                 task_id=args.task_id,
             )
             result = {"run_id": run_id, "execution": execution}
@@ -1453,6 +1518,8 @@ async def call_tool(
                     stdin_text=args.script,
                     timeout_seconds=args.timeout_seconds,
                     purpose=args.purpose,
+                    result_ref=args.result_ref,
+                    execution_class=args.execution_class,
                     may_mutate=True,
                     task_id=args.task_id,
                 ),
@@ -1472,6 +1539,9 @@ async def call_tool(
                 max_output_bytes=max_output,
                 may_mutate=True,
                 purpose=args.purpose,
+                result_ref=args.result_ref,
+                execution_class=args.execution_class,
+                lease_root=_config.workspace.runs,
                 task_id=args.task_id,
                 stdin_text=args.script,
             )

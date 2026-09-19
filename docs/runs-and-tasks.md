@@ -26,7 +26,7 @@ Run records contain bounded execution metadata only. They never persist:
 - stdout or stderr text;
 - target addresses, users or credential paths.
 
-A run can contain execution mode, purpose, script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency, output byte/truncation counters and a bounded `result_summary`. Compact run listings expose purpose, result summary, `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because Hypershell Reach cannot infer repeat safety from arbitrary caller input.
+A run can contain execution mode, purpose, script ID, source, content hash, argument names, target ID, timestamps, exit status, mutation classification, declared idempotency, output byte/truncation counters, a bounded `result_summary` and an optional caller-declared `result_ref`. Compact run listings expose purpose, result summary, result reference, `may_mutate` and `idempotent`. Managed tools persist their declared values; raw command and shell runs keep `idempotent: null` because Hypershell Reach cannot infer repeat safety from arbitrary caller input.
 
 ### Purpose contract
 
@@ -40,9 +40,21 @@ Internal RunStore callers may omit purpose when no agent intent exists. Historic
 
 A persisted result summary is one printable line with a hard maximum of 512 characters. Hypershell Reach deterministically truncates an internally generated summary that would exceed the limit and appends ` [truncated]`; persisted values beyond the schema bound are rejected. This does not create a second receipt, log or artifact repository: the Run remains the execution receipt.
 
+### Execution class contract
+
+Agent execution calls accept `execution_class: normal|heavy`, defaulting to `normal`. The class is explicit caller intent; Reach never guesses workload weight from command text, script content, model name or target capability. Runs persist the class for observability.
+
+A `heavy` class has no effect unless the selected target configures `max_heavy_concurrency`. When a limit is configured, synchronous and asynchronous owners coordinate through fixed advisory lease files in the Run root. If all heavy slots are occupied, a new heavy execution is rejected before remote SSH starts. Normal executions do not consume a heavy slot, and targets without a configured limit retain their existing concurrency behavior.
+
+### Result reference contract
+
+`result_ref` is an optional caller-declared pointer to bounded decision evidence that the execution is expected to publish, such as a report path or stable application/state identifier. Reach stores only the pointer and never dereferences, copies or validates the referenced content. It is intended to make durable or transport-risk Runs reconstructable when stdout is not available after the initiating client turn.
+
+The value is trimmed, must be one printable non-empty line and is limited to 512 characters. It must not contain credentials, tokens, secret values, command text or other sensitive payloads. A persisted `result_ref` does not prove that the referenced artifact exists or is valid; terminal Run status plus the referenced owner's own postconditions remain authoritative.
+
 ### Schema compatibility
 
-New Run writes use schema v3. The reader accepts Run v1, v2 and v3, so existing stores require no bulk migration for forward operation. Run v1 has no purpose or result summary; Run v1 and v2 have no persisted `execution_mode` and are projected as `sync`. Historical records are not implicitly rewritten. Schema v3 is intentionally explicit because executor ownership is durable state, not an in-memory transport detail.
+New Run writes use schema v4. The reader accepts Run v1 through v4, so existing stores require no bulk migration for forward operation. Run v1 has no purpose or result summary; Run v1 and v2 have no persisted `execution_mode` and are projected as `sync`; Run v1 through v3 have no `result_ref`. Historical records are not implicitly rewritten. Schema v3 made executor ownership durable state; schema v4 adds only the bounded result pointer without persisting result content.
 
 ### States
 
@@ -63,7 +75,7 @@ Raw `run_command` and `run_shell` are treated as potentially mutating because Hy
 
 ### Recovery
 
-Recovery is ownership-specific. The MCP runtime reconciles only stale synchronous `running` records as `interrupted` with `ServerRestart`; the separately supervised executor reconciles only stale asynchronous `running` records with `ExecutorRestart`. Starting or reconnecting one runtime cannot interrupt work owned by the other. This records local interruption only; it does not claim the remote system rolled back or completed.
+Recovery is ownership-specific. The MCP runtime reconciles only stale synchronous `running` records as `interrupted` with `ServerRestart`; the separately supervised executor reconciles only stale asynchronous `running` records with `ExecutorRestart`. In addition, each live owner closes its own in-process ownership gap: if a synchronous execution scope exits while its Run is still `running`, Reach marks that Run `unknown` with `ServerOwnershipLost`; if an asynchronous executor task completes while its Run is still `running`, Reach marks it `unknown` with `ExecutorOwnershipLost`. These guards are based on demonstrable local ownership loss, not Run age, so a healthy long-running remote execution is never classified stale merely because it is slow. Starting or reconnecting one runtime cannot interrupt work owned by the other. These states record local execution uncertainty only; they do not claim the remote system rolled back or completed.
 
 ### Run tools
 

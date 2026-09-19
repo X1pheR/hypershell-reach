@@ -129,6 +129,78 @@ async def test_start_command_accepts_duration_above_synchronous_ceiling(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_start_command_passes_heavy_execution_class_to_executor(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    config.executor.socket_path = str(tmp_path / "executor.sock")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    captured = {}
+
+    async def fake_submit_execution(current_config, submission):
+        captured["submission"] = submission
+        return {
+            "run_id": "run-async-heavy",
+            "status": "running",
+            "execution_mode": "async",
+        }
+
+    monkeypatch.setattr(server, "submit_execution", fake_submit_execution, raising=False)
+    content = await server.call_tool(
+        "start_command",
+        {
+            "target": "example",
+            "command": "sleep 180",
+            "timeout_seconds": 180,
+            "purpose": "Run one heavy workload.",
+            "execution_class": "heavy",
+        },
+    )
+
+    assert json.loads(content[0].text)["run_id"] == "run-async-heavy"
+    assert captured["submission"].execution_class == "heavy"
+
+
+@pytest.mark.asyncio
+async def test_start_command_passes_result_ref_to_durable_run(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    config.defaults.max_timeout_seconds = 300
+    config.defaults.max_synchronous_timeout_seconds = 90
+    config.executor.socket_path = str(tmp_path / "executor.sock")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(
+        server,
+        "_run_store_instance",
+        RunStore(config.workspace.runs, reconcile_modes={"sync"}),
+    )
+    captured = {}
+
+    async def fake_submit_execution(current_config, submission):
+        captured["submission"] = submission
+        return {
+            "run_id": "run-async-result-ref",
+            "status": "running",
+            "execution_mode": "async",
+        }
+
+    monkeypatch.setattr(server, "submit_execution", fake_submit_execution, raising=False)
+    content = await server.call_tool(
+        "start_command",
+        {
+            "target": "example",
+            "command": "sleep 180",
+            "timeout_seconds": 180,
+            "purpose": "Persist a durable report reference.",
+            "result_ref": "reports/example.json",
+        },
+    )
+    result = json.loads(content[0].text)
+
+    assert result["run_id"] == "run-async-result-ref"
+    assert captured["submission"].result_ref == "reports/example.json"
+
+
+@pytest.mark.asyncio
 async def test_run_command_rejects_duration_above_synchronous_ceiling(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
     config.defaults.max_timeout_seconds = 300
@@ -226,6 +298,121 @@ async def test_cancel_run_delegates_to_async_executor(tmp_path, monkeypatch) -> 
 
     assert captured == {"config": config, "run_id": run_id}
     assert result == {"run_id": run_id, "status": "interrupted", "cancelled": True}
+
+
+@pytest.mark.asyncio
+async def test_sync_heavy_run_respects_shared_target_lease(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    config.targets["example"].max_heavy_concurrency = 1
+    store = RunStore(config.workspace.runs, reconcile_modes=set())
+    monkeypatch.setattr(server, "_run_store_instance", store)
+    target = config.enabled_target("example")
+    existing = __import__(
+        "hypershell_reach.execution", fromlist=["acquire_execution_lease"]
+    ).acquire_execution_lease(
+        config.workspace.runs,
+        target_id="example",
+        execution_class="heavy",
+        max_heavy_concurrency=1,
+    )
+    assert existing is not None
+    try:
+        with pytest.raises(RuntimeError, match="heavy execution limit"):
+            await server._tracked_ssh_run(
+                operation="run_command",
+                target_id="example",
+                target=target,
+                remote_command="true",
+                timeout_seconds=30,
+                connect_timeout_seconds=10,
+                max_output_bytes=262_144,
+                may_mutate=False,
+                purpose="Exercise heavy execution serialization.",
+                execution_class="heavy",
+                lease_root=config.workspace.runs,
+            )
+    finally:
+        existing.release()
+
+    assert store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_sync_heavy_lease_is_released_when_task_preparation_fails(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    config.targets["example"].max_heavy_concurrency = 1
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    target = config.enabled_target("example")
+
+    def reject_task(**kwargs):
+        raise ValueError("task rejected")
+
+    monkeypatch.setattr(server, "_prepare_task_execution", reject_task)
+
+    with pytest.raises(ValueError, match="task rejected"):
+        await server._tracked_ssh_run(
+            operation="run_command",
+            target_id="example",
+            target=target,
+            remote_command="true",
+            timeout_seconds=30,
+            connect_timeout_seconds=10,
+            max_output_bytes=262_144,
+            may_mutate=True,
+            purpose="Exercise lease cleanup before dispatch.",
+            execution_class="heavy",
+            lease_root=config.workspace.runs,
+            task_id="task-example",
+        )
+
+    lease = __import__(
+        "hypershell_reach.execution", fromlist=["acquire_execution_lease"]
+    ).acquire_execution_lease(
+        config.workspace.runs,
+        target_id="example",
+        execution_class="heavy",
+        max_heavy_concurrency=1,
+    )
+    assert lease is not None
+    lease.release()
+
+
+@pytest.mark.asyncio
+async def test_sync_owner_exit_without_terminal_record_marks_run_unknown(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    store = RunStore(config.workspace.runs, reconcile_modes=set())
+    monkeypatch.setattr(server, "_run_store_instance", store)
+
+    class OwnerLost(BaseException):
+        pass
+
+    async def fake_run_ssh(**kwargs):
+        raise OwnerLost
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    target = config.enabled_target("example")
+
+    with pytest.raises(OwnerLost):
+        await server._tracked_ssh_run(
+            operation="run_command",
+            target_id="example",
+            target=target,
+            remote_command="true",
+            timeout_seconds=30,
+            connect_timeout_seconds=10,
+            max_output_bytes=262_144,
+            may_mutate=False,
+            purpose="Exercise sync ownership-loss reconciliation.",
+        )
+
+    record = store.list()[0]
+    assert record.status == "unknown"
+    assert record.error_type == "ServerOwnershipLost"
+    assert record.ambiguous is False
 
 
 @pytest.mark.asyncio
