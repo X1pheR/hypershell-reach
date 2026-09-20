@@ -184,6 +184,13 @@ class GetRunInput(BaseModel):
     run_id: str = Field(min_length=1, max_length=128)
 
 
+class AwaitRunTerminalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = Field(min_length=1, max_length=128)
+    max_wait_seconds: int = Field(ge=0, le=90)
+
+
 class RetainRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -424,6 +431,41 @@ async def _cancel_async_execution(run_id: str) -> dict[str, object]:
     if _executor_service is not None:
         return await _executor_service.cancel(run_id)
     return await cancel_execution(_config, run_id)
+
+
+async def _await_terminal_execution(
+    run_id: str, *, max_wait_seconds: int
+) -> dict[str, object]:
+    if _executor_service is not None:
+        return await _executor_service.await_terminal(
+            run_id, max_wait_seconds=max_wait_seconds
+        )
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_wait_seconds
+    while True:
+        record = _run_store().get(run_id)
+        if record.status != "running":
+            return {
+                "run_id": record.id,
+                "status": record.status,
+                "terminal": True,
+                "result_summary": record.result_summary,
+                "reconciliation": {"status": "not-needed"},
+            }
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return {
+                "run_id": record.id,
+                "status": record.status,
+                "terminal": False,
+                "result_summary": record.result_summary,
+                "reconciliation": {
+                    "status": "not-attempted",
+                    "reason": "NoAuthoritativeOwnerEvidence",
+                },
+            }
+        await asyncio.sleep(min(0.05, remaining))
 
 
 def _candidate_store() -> CandidateStore:
@@ -912,6 +954,22 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="await_run_terminal",
+            description=(
+                "Wait for one existing Hypershell Reach Run to become terminal for at most "
+                "max_wait_seconds. This never submits, replays or cancels remote work. When the "
+                "live executor has authoritative evidence that an async running record has lost "
+                "ownership, Reach reconciles that stale bookkeeping state once and reports it."
+            ),
+            inputSchema=AwaitRunTerminalInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="set_run_retained",
             description=(
                 "Set or clear the retention override for one run record. This changes only local "
@@ -1334,6 +1392,11 @@ async def call_tool(
         elif name == "get_run":
             args = GetRunInput(**arguments)
             result = _run_store().get(args.run_id).model_dump()
+        elif name == "await_run_terminal":
+            args = AwaitRunTerminalInput(**arguments)
+            result = await _await_terminal_execution(
+                args.run_id, max_wait_seconds=args.max_wait_seconds
+            )
         elif name == "set_run_retained":
             args = RetainRunInput(**arguments)
             result = _run_store().set_retained(args.run_id, args.retained).model_dump()

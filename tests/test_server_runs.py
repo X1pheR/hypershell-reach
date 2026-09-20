@@ -432,3 +432,50 @@ async def test_stdio_startup_reconciles_only_synchronous_runs(tmp_path, monkeypa
 
     with pytest.raises(ExpectedStop):
         await server.run_stdio()
+
+@pytest.mark.asyncio
+async def test_await_run_terminal_tool_schema_is_bounded_and_non_destructive() -> None:
+    tools = {tool.name: tool for tool in await server.list_tools()}
+
+    tool = tools["await_run_terminal"]
+    assert tool.inputSchema["properties"]["run_id"]["maxLength"] == 128
+    assert tool.inputSchema["properties"]["max_wait_seconds"]["minimum"] == 0
+    assert tool.inputSchema["properties"]["max_wait_seconds"]["maximum"] == 90
+    assert tool.annotations.readOnlyHint is False
+    assert tool.annotations.destructiveHint is False
+    assert tool.annotations.idempotentHint is True
+    assert tool.annotations.openWorldHint is False
+
+
+@pytest.mark.asyncio
+async def test_await_run_terminal_delegates_to_live_executor_without_replay(
+    tmp_path, monkeypatch
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    captured = {}
+
+    class FakeExecutor:
+        async def await_terminal(self, run_id: str, *, max_wait_seconds: int):
+            captured["run_id"] = run_id
+            captured["max_wait_seconds"] = max_wait_seconds
+            return {
+                "run_id": run_id,
+                "status": "succeeded",
+                "terminal": True,
+                "result_summary": "Execution succeeded with exit_code=0.",
+                "reconciliation": {"status": "not-needed"},
+            }
+
+    monkeypatch.setattr(server, "_executor_service", FakeExecutor(), raising=False)
+    run_id = "run-20260920T000000000000Z-aaaaaaaaaaaa"
+    content = await server.call_tool(
+        "await_run_terminal",
+        {"run_id": run_id, "max_wait_seconds": 17},
+    )
+    result = json.loads(content[0].text)
+
+    assert captured == {"run_id": run_id, "max_wait_seconds": 17}
+    assert result["run_id"] == run_id
+    assert result["terminal"] is True
+    assert result["status"] == "succeeded"

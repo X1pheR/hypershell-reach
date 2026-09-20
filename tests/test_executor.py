@@ -416,3 +416,100 @@ async def test_unexpected_executor_error_marks_run_unknown(tmp_path, monkeypatch
         assert record.error_type == "KeyError"
     finally:
         await service.stop()
+
+@pytest.mark.asyncio
+async def test_await_terminal_waits_for_owned_async_run_without_replay(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    release = asyncio.Event()
+
+    async def fake_run_ssh(**kwargs):
+        await release.wait()
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 25,
+            "stdout": {"text": "SECRET-NOT-PERSISTED", "bytes": 20, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(executor, "run_ssh", fake_run_ssh)
+    service = executor.ExecutorService(config, serve_socket=False)
+    await service.start()
+    try:
+        accepted = service.submit(_submission())
+        waiter = asyncio.create_task(
+            service.await_terminal(accepted["run_id"], max_wait_seconds=2)
+        )
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        release.set()
+        result = await waiter
+
+        assert result["run_id"] == accepted["run_id"]
+        assert result["status"] == "succeeded"
+        assert result["terminal"] is True
+        assert result["reconciliation"] == {"status": "not-needed"}
+        assert "SECRET-NOT-PERSISTED" not in str(result)
+        assert len(service.store.list()) == 1
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_reconciles_async_running_record_without_owner(tmp_path) -> None:
+    config = _config(tmp_path)
+    service = executor.ExecutorService(config, serve_socket=False)
+    await service.start()
+    try:
+        record = service.store.create(
+            operation="run_command",
+            target="example",
+            timeout_seconds=300,
+            may_mutate=True,
+            execution_mode="async",
+            purpose="Exercise authoritative stale-run reconciliation.",
+        )
+
+        result = await service.await_terminal(record.id, max_wait_seconds=2)
+
+        assert result["status"] == "unknown"
+        assert result["terminal"] is True
+        assert result["reconciliation"] == {
+            "status": "reconciled",
+            "reason": "ExecutorOwnershipLost",
+        }
+        recovered = service.store.get(record.id)
+        assert recovered.error_type == "ExecutorOwnershipLost"
+        assert recovered.ambiguous is True
+    finally:
+        await service.stop()
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_returns_running_when_sync_run_has_no_terminal_evidence(tmp_path) -> None:
+    config = _config(tmp_path)
+    service = executor.ExecutorService(config, serve_socket=False)
+    await service.start()
+    try:
+        record = service.store.create(
+            operation="run_command",
+            target="example",
+            timeout_seconds=300,
+            may_mutate=False,
+            execution_mode="sync",
+            purpose="Exercise bounded observation without owner inference.",
+        )
+
+        result = await service.await_terminal(record.id, max_wait_seconds=0)
+
+        assert result["status"] == "running"
+        assert result["terminal"] is False
+        assert result["reconciliation"] == {
+            "status": "not-attempted",
+            "reason": "NoAuthoritativeOwnerEvidence",
+        }
+        assert service.store.get(record.id).status == "running"
+    finally:
+        await service.stop()

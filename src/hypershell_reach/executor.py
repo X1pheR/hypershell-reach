@@ -167,6 +167,86 @@ class ExecutorService:
         while self._tasks:
             await asyncio.gather(*list(self._tasks.values()), return_exceptions=True)
 
+    async def await_terminal(
+        self, run_id: str, *, max_wait_seconds: int
+    ) -> dict[str, object]:
+        if max_wait_seconds < 0 or max_wait_seconds > 90:
+            raise ValueError("max_wait_seconds must be between 0 and 90")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max_wait_seconds
+
+        while True:
+            record = self.store.get(run_id)
+            if record.status != "running":
+                return {
+                    "run_id": record.id,
+                    "status": record.status,
+                    "terminal": True,
+                    "result_summary": record.result_summary,
+                    "reconciliation": {"status": "not-needed"},
+                }
+
+            reconciliation = {
+                "status": "not-attempted",
+                "reason": "NoAuthoritativeOwnerEvidence",
+            }
+            if record.execution_mode == "async":
+                task = self._tasks.get(run_id)
+                if task is None:
+                    record = self.store.mark_unknown(
+                        run_id, error_type="ExecutorOwnershipLost"
+                    )
+                    return {
+                        "run_id": record.id,
+                        "status": record.status,
+                        "terminal": True,
+                        "result_summary": record.result_summary,
+                        "reconciliation": {
+                            "status": "reconciled",
+                            "reason": "ExecutorOwnershipLost",
+                        },
+                    }
+                if task.done():
+                    # Let the task completion callback publish its terminal state first.
+                    await asyncio.sleep(0)
+                    record = self.store.get(run_id)
+                    if record.status == "running":
+                        record = self.store.mark_unknown(
+                            run_id, error_type="ExecutorOwnershipLost"
+                        )
+                        return {
+                            "run_id": record.id,
+                            "status": record.status,
+                            "terminal": True,
+                            "result_summary": record.result_summary,
+                            "reconciliation": {
+                                "status": "reconciled",
+                                "reason": "ExecutorOwnershipLost",
+                            },
+                        }
+                    return {
+                        "run_id": record.id,
+                        "status": record.status,
+                        "terminal": True,
+                        "result_summary": record.result_summary,
+                        "reconciliation": {"status": "not-needed"},
+                    }
+                reconciliation = {
+                    "status": "not-needed",
+                    "reason": "ExecutorOwned",
+                }
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return {
+                    "run_id": record.id,
+                    "status": record.status,
+                    "terminal": False,
+                    "result_summary": record.result_summary,
+                    "reconciliation": reconciliation,
+                }
+            await asyncio.sleep(min(0.05, remaining))
+
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,

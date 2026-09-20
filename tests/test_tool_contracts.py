@@ -28,6 +28,7 @@ def test_tools_have_truthful_annotations() -> None:
         "get_script": (True, False, True, False),
         "list_runs": (True, False, True, False),
         "get_run": (True, False, True, False),
+        "await_run_terminal": (False, False, True, False),
         "set_run_retained": (False, False, True, False),
         "list_tasks": (True, False, True, False),
         "get_task": (True, False, True, False),

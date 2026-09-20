@@ -75,12 +75,13 @@ Raw `run_command` and `run_shell` are treated as potentially mutating because Hy
 
 ### Recovery
 
-Recovery is ownership-specific. The MCP runtime reconciles only stale synchronous `running` records as `interrupted` with `ServerRestart`; the separately supervised executor reconciles only stale asynchronous `running` records with `ExecutorRestart`. In addition, each live owner closes its own in-process ownership gap: if a synchronous execution scope exits while its Run is still `running`, Reach marks that Run `unknown` with `ServerOwnershipLost`; if an asynchronous executor task completes while its Run is still `running`, Reach marks it `unknown` with `ExecutorOwnershipLost`. These guards are based on demonstrable local ownership loss, not Run age, so a healthy long-running remote execution is never classified stale merely because it is slow. Starting or reconnecting one runtime cannot interrupt work owned by the other. These states record local execution uncertainty only; they do not claim the remote system rolled back or completed.
+Recovery is ownership-specific. The MCP runtime reconciles only stale synchronous `running` records as `interrupted` with `ServerRestart`; the separately supervised executor reconciles only stale asynchronous `running` records with `ExecutorRestart`. In addition, each live owner closes its own in-process ownership gap: if a synchronous execution scope exits while its Run is still `running`, Reach marks that Run `unknown` with `ServerOwnershipLost`; if an asynchronous executor task completes while its Run is still `running`, Reach marks it `unknown` with `ExecutorOwnershipLost`. These guards are based on demonstrable local ownership loss, not Run age, so a healthy long-running remote execution is never classified stale merely because it is slow. `await_run_terminal` follows the same rule: it can repair an asynchronous stale `running` record only when the live executor proves that ownership is absent; otherwise a bounded wait may legitimately return `terminal=false`. Starting or reconnecting one runtime cannot interrupt work owned by the other. These states record local execution uncertainty only; they do not claim the remote system rolled back or completed.
 
 ### Run tools
 
 - `list_runs` returns bounded summaries and can filter by state or task ID.
 - `get_run` returns one complete metadata record.
+- `await_run_terminal` waits server-side for at most 0 to 90 seconds without replay or cancellation; it may reconcile only demonstrable live-executor ownership loss.
 - `set_run_retained` sets a local retention override without executing anything remotely.
 - `cancel_run` explicitly cancels one running async Run through the executor and requires confirmation.
 
