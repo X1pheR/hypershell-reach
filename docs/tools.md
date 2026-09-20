@@ -203,7 +203,7 @@ Transitions an approved Candidate to `implemented` or `automated` and requires a
 
 Hypershell Reach intentionally exposes two execution lifetimes. `run_command`, `run_shell` and `run_script` are synchronous and may run only up to the target's effective `max_synchronous_timeout_seconds`. `start_command`, `start_shell` and `start_script` submit durable asynchronous work to the separately supervised executor and return a Run ID immediately; they may use the full effective `max_timeout_seconds`. The split is explicit rather than automatically changing a tool's return shape based on duration.
 
-Accepted asynchronous work is owned by the executor, not by the requesting MCP connection. Use `get_run` or `list_runs` to poll `running` and terminal state. Polling reads state only and cannot duplicate execution. Caller disconnect is not cancellation.
+Accepted asynchronous work is owned by the executor, not by the requesting MCP connection. Use `await_run_terminal` for one bounded server-side observation window when the caller needs terminal state without client-side polling; `get_run` and `list_runs` remain immediate state reads. None of these observation tools can duplicate execution. Caller disconnect is not cancellation.
 
 ### `run_command` / `start_command`
 
@@ -216,6 +216,10 @@ Both execute bounded `sh` or `bash` input over SSH stdin. `purpose` is required 
 ### `run_script` / `start_script`
 
 Both preserve the same registry-owned script content, typed arguments, capability checks, fixed script timeout, mutation classification, idempotency metadata, source ID and content hash. `start_script` changes execution lifetime only; it does not weaken the managed-tool contract.
+
+### `await_run_terminal`
+
+Waits for one existing Run for a caller-selected bounded window of 0 to 90 seconds and returns only `run_id`, status, terminal state, the bounded persisted `result_summary`, and reconciliation metadata. It never submits, replays or cancels remote work. When the live executor has authoritative evidence that an asynchronous `running` record no longer has an owned execution task, Reach reconciles that stale bookkeeping state once as `unknown` with `ExecutorOwnershipLost`. Without authoritative owner evidence, a still-running Run remains `running`.
 
 ### `cancel_run`
 

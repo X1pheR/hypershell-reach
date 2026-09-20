@@ -76,7 +76,7 @@ executor:
 
 The execution manager is integrated into the long-lived Reach service. `start_command`, `start_shell` and `start_script` create an asynchronous Run and return its ID quickly. Accepted work is independent of the individual MCP request lifetime but remains owned by the Reach process lifecycle.
 
-`max_concurrency` bounds simultaneous asynchronous SSH executions. Reach does not require an external queue, worker process or Unix socket in the maintained deployment model.
+`max_concurrency` bounds simultaneous asynchronous SSH executions. Per-target `max_heavy_concurrency` is independent: it is an opt-in cross-process guard shared by synchronous and asynchronous executions classified as `heavy`. Reach does not infer workload weight from command text. Reach does not require an external queue, worker process or Unix socket in the maintained deployment model.
 
 ## Managed tool sources
 
@@ -123,6 +123,7 @@ targets:
     transport: ssh
     capabilities: [linux, bash, docker]
     enabled: true
+    max_heavy_concurrency: 1
     ssh:
       host: 192.0.2.10
       port: 22
@@ -131,9 +132,11 @@ targets:
       known_hosts_file: /run/secrets/reach/known_hosts
 ```
 
-Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns IDs, display names, capabilities, the effective execution timeout and the effective synchronous transport-safe timeout. It never returns host addresses, usernames or credential paths.
+Target IDs use lowercase letters, numbers and hyphens. `list_targets` returns IDs, display names, capabilities, the effective execution timeout, the effective synchronous transport-safe timeout and `max_heavy_concurrency`. It never returns host addresses, usernames or credential paths.
 
 `capabilities` are compatibility tags. They are not an authorization system.
+
+`max_heavy_concurrency` is optional and unset by default. When configured, only executions explicitly submitted with `execution_class: heavy` consume one of that target's heavy slots. `execution_class: normal` is unaffected. Targets that omit the setting remain unrestricted by this per-target heavy guard; the executor's global `max_concurrency` still applies to asynchronous work.
 
 ## Skill sources
 

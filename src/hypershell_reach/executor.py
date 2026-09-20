@@ -8,11 +8,11 @@ import stat
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .config import ReachConfig, load_config
-from .execution import run_ssh
-from .runs import RunOperation, RunStore
+from .execution import ExecutionLease, acquire_execution_lease, run_ssh
+from .runs import RunExecutionClass, RunOperation, RunStore, normalize_result_ref
 
 _MAX_MESSAGE_BYTES = 2_097_152
 
@@ -26,6 +26,8 @@ class ExecutionSubmission(BaseModel):
     stdin_text: str | None = Field(default=None, max_length=1_048_576)
     timeout_seconds: int = Field(ge=1, le=900)
     purpose: str = Field(min_length=1, max_length=512)
+    result_ref: str | None = Field(default=None, min_length=1, max_length=512)
+    execution_class: RunExecutionClass = "normal"
     may_mutate: bool
     idempotent: bool | None = None
     task_id: str | None = None
@@ -33,6 +35,13 @@ class ExecutionSubmission(BaseModel):
     script_source: str | None = None
     script_sha256: str | None = None
     argument_names: list[str] = Field(default_factory=list)
+
+    @field_validator("result_ref", mode="before")
+    @classmethod
+    def validate_result_ref(cls, value: object) -> object:
+        if value is None:
+            return None
+        return normalize_result_ref(value)
 
 
 class ExecutorRequest(BaseModel):
@@ -62,6 +71,7 @@ class ExecutorService:
         self._server: asyncio.AbstractServer | None = None
         self._store: RunStore | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._leases: dict[str, ExecutionLease] = {}
         self._cancel_reasons: dict[str, str] = {}
         self._semaphore = asyncio.Semaphore(config.executor.max_concurrency)
         self._lock_handle = None
@@ -157,6 +167,86 @@ class ExecutorService:
         while self._tasks:
             await asyncio.gather(*list(self._tasks.values()), return_exceptions=True)
 
+    async def await_terminal(
+        self, run_id: str, *, max_wait_seconds: int
+    ) -> dict[str, object]:
+        if max_wait_seconds < 0 or max_wait_seconds > 90:
+            raise ValueError("max_wait_seconds must be between 0 and 90")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max_wait_seconds
+
+        while True:
+            record = self.store.get(run_id)
+            if record.status != "running":
+                return {
+                    "run_id": record.id,
+                    "status": record.status,
+                    "terminal": True,
+                    "result_summary": record.result_summary,
+                    "reconciliation": {"status": "not-needed"},
+                }
+
+            reconciliation = {
+                "status": "not-attempted",
+                "reason": "NoAuthoritativeOwnerEvidence",
+            }
+            if record.execution_mode == "async":
+                task = self._tasks.get(run_id)
+                if task is None:
+                    record = self.store.mark_unknown(
+                        run_id, error_type="ExecutorOwnershipLost"
+                    )
+                    return {
+                        "run_id": record.id,
+                        "status": record.status,
+                        "terminal": True,
+                        "result_summary": record.result_summary,
+                        "reconciliation": {
+                            "status": "reconciled",
+                            "reason": "ExecutorOwnershipLost",
+                        },
+                    }
+                if task.done():
+                    # Let the task completion callback publish its terminal state first.
+                    await asyncio.sleep(0)
+                    record = self.store.get(run_id)
+                    if record.status == "running":
+                        record = self.store.mark_unknown(
+                            run_id, error_type="ExecutorOwnershipLost"
+                        )
+                        return {
+                            "run_id": record.id,
+                            "status": record.status,
+                            "terminal": True,
+                            "result_summary": record.result_summary,
+                            "reconciliation": {
+                                "status": "reconciled",
+                                "reason": "ExecutorOwnershipLost",
+                            },
+                        }
+                    return {
+                        "run_id": record.id,
+                        "status": record.status,
+                        "terminal": True,
+                        "result_summary": record.result_summary,
+                        "reconciliation": {"status": "not-needed"},
+                    }
+                reconciliation = {
+                    "status": "not-needed",
+                    "reason": "ExecutorOwned",
+                }
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return {
+                    "run_id": record.id,
+                    "status": record.status,
+                    "terminal": False,
+                    "result_summary": record.result_summary,
+                    "reconciliation": reconciliation,
+                }
+            await asyncio.sleep(min(0.05, remaining))
+
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,
@@ -201,28 +291,70 @@ class ExecutorService:
                 f"requested timeout {submission.timeout_seconds}s exceeds target limit {max_timeout}s"
             )
 
-        record = self.store.create(
-            operation=submission.operation,
-            target=submission.target,
-            timeout_seconds=submission.timeout_seconds,
-            may_mutate=submission.may_mutate,
-            execution_mode="async",
-            purpose=submission.purpose,
-            idempotent=submission.idempotent,
-            task_id=submission.task_id,
-            script_id=submission.script_id,
-            script_source=submission.script_source,
-            script_sha256=submission.script_sha256,
-            argument_names=submission.argument_names,
+        lease = acquire_execution_lease(
+            self.config.workspace.runs,
+            target_id=submission.target,
+            execution_class=submission.execution_class,
+            max_heavy_concurrency=target.max_heavy_concurrency,
         )
-        task = asyncio.create_task(self._execute(record.id, submission), name=f"reach-async:{record.id}")
-        self._tasks[record.id] = task
-        task.add_done_callback(lambda _task, run_id=record.id: self._tasks.pop(run_id, None))
+        try:
+            record = self.store.create(
+                operation=submission.operation,
+                target=submission.target,
+                timeout_seconds=submission.timeout_seconds,
+                may_mutate=submission.may_mutate,
+                execution_mode="async",
+                execution_class=submission.execution_class,
+                purpose=submission.purpose,
+                result_ref=submission.result_ref,
+                idempotent=submission.idempotent,
+                task_id=submission.task_id,
+                script_id=submission.script_id,
+                script_source=submission.script_source,
+                script_sha256=submission.script_sha256,
+                argument_names=submission.argument_names,
+            )
+            if lease is not None:
+                self._leases[record.id] = lease
+            task = asyncio.create_task(
+                self._execute(record.id, submission), name=f"reach-async:{record.id}"
+            )
+            self._tasks[record.id] = task
+            task.add_done_callback(
+                lambda completed, run_id=record.id: self._reconcile_completed_task(
+                    run_id, completed
+                )
+            )
+        except Exception:
+            if lease is not None:
+                if "record" in locals():
+                    self._leases.pop(record.id, None)
+                    if self.store.get(record.id).status == "running":
+                        self.store.mark_unknown(
+                            record.id, error_type="ExecutorSubmissionFailed"
+                        )
+                lease.release()
+            raise
         return {
             "run_id": record.id,
             "status": record.status,
             "execution_mode": record.execution_mode,
         }
+
+    def _reconcile_completed_task(
+        self, run_id: str, completed: asyncio.Task[None]
+    ) -> None:
+        try:
+            if self._store is None:
+                return
+            record = self._store.get(run_id)
+            if record.status == "running":
+                self._store.mark_unknown(run_id, error_type="ExecutorOwnershipLost")
+        finally:
+            lease = self._leases.pop(run_id, None)
+            if lease is not None:
+                lease.release()
+            self._tasks.pop(run_id, None)
 
     async def _cancel(self, run_id: str) -> dict[str, object]:
         record = self.store.get(run_id)

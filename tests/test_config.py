@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from hypershell_reach.config import ReachConfig, load_config
+from hypershell_reach.config import ReachConfig, Target, load_config
 
 
 def _config() -> dict:
@@ -28,6 +28,37 @@ def _config() -> dict:
             }
         },
     }
+
+
+def test_target_optional_heavy_concurrency_limit_is_typed() -> None:
+    target = Target.model_validate(
+        {
+            "display_name": "Laptop",
+            "capabilities": ["windows"],
+            "max_heavy_concurrency": 1,
+            "ssh": {
+                "host": "203.0.113.10",
+                "user": "operator",
+                "identity_file": "/run/key",
+                "known_hosts_file": "/run/known_hosts",
+            },
+        }
+    )
+    assert target.max_heavy_concurrency == 1
+
+    unlimited = Target.model_validate(
+        {
+            "display_name": "Other",
+            "capabilities": ["linux"],
+            "ssh": {
+                "host": "203.0.113.11",
+                "user": "operator",
+                "identity_file": "/run/key",
+                "known_hosts_file": "/run/known_hosts",
+            },
+        }
+    )
+    assert unlimited.max_heavy_concurrency is None
 
 
 def test_config_normalizes_target_capabilities() -> None:
