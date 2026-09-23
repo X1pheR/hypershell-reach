@@ -555,3 +555,136 @@ def test_repair_tolerates_task_archived_by_another_process_during_scan(tmp_path,
 
     assert store.repair() == []
     assert store.get(created.id) == terminal
+
+def test_task_execution_lease_is_exclusive_and_guards_updates(tmp_path) -> None:
+    store = TaskStore(tmp_path / "tasks", tmp_path / "archive")
+    task = store.create(title="Lease", objective="Serialize one executor.")
+
+    first = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-a",
+        scope="task",
+        lease_seconds=120,
+    )
+    second = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-b",
+        scope="task",
+        lease_seconds=120,
+    )
+
+    assert first["acquired"] is True
+    assert first["lease_id"].startswith("tlease-")
+    assert first["owner_state"]["executor_id"] == "chat-a"
+    assert second["acquired"] is False
+    assert second["owner_state"]["lease_id"] == first["lease_id"]
+
+    with pytest.raises(ValueError, match="active task execution lease"):
+        store.update(task.id, title="blocked")
+
+    updated = store.update(
+        task.id,
+        title="owned",
+        task_lease_id=first["lease_id"],
+    )
+    assert updated.title == "owned"
+
+def test_task_execution_lease_refresh_release_and_expiry(tmp_path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    clock = [datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)]
+    store = TaskStore(
+        tmp_path / "tasks",
+        tmp_path / "archive",
+        now=lambda: clock[0],
+    )
+    task = store.create(title="Lease lifecycle", objective="Bound stale owners.")
+    acquired = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-a",
+        scope="task",
+        lease_seconds=30,
+    )
+
+    clock[0] += timedelta(seconds=10)
+    refreshed = store.refresh_execution_lease(
+        task.id,
+        lease_id=acquired["lease_id"],
+        lease_seconds=60,
+    )
+    assert refreshed["owner_state"]["refreshed_at"] == "2026-09-23T10:00:10.000000Z"
+    assert refreshed["owner_state"]["expires_at"] == "2026-09-23T10:01:10.000000Z"
+
+    with pytest.raises(ValueError, match="task execution lease does not match"):
+        store.release_execution_lease(task.id, lease_id="tlease-" + "0" * 32)
+
+    released = store.release_execution_lease(task.id, lease_id=acquired["lease_id"])
+    assert released["handoff_state"] == "released"
+
+    successor = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-b",
+        scope="task",
+        lease_seconds=30,
+    )
+    assert successor["acquired"] is True
+    assert successor["owner_state"]["executor_id"] == "chat-b"
+
+    clock[0] += timedelta(seconds=31)
+    updated = store.update(task.id, title="expired lease no longer blocks")
+    assert updated.title == "expired lease no longer blocks"
+
+def test_task_lease_expiry_never_clears_pending_mutation(tmp_path) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    clock = [datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)]
+    store = TaskStore(
+        tmp_path / "tasks",
+        tmp_path / "archive",
+        now=lambda: clock[0],
+    )
+    task = store.create(title="Lease pending", objective="Preserve mutation evidence.")
+    lease = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-a",
+        scope="task",
+        lease_seconds=30,
+    )
+
+    with pytest.raises(ValueError, match="active task execution lease"):
+        store.mark_mutation_pending(task.id, purpose="blocked stale turn")
+
+    pending = store.mark_mutation_pending(
+        task.id,
+        purpose="owned mutation",
+        task_lease_id=lease["lease_id"],
+    )
+    assert any(
+        blocker.startswith("[reach:pending-mutation]")
+        for blocker in pending.continuity.blockers
+    )
+
+    clock[0] += timedelta(seconds=31)
+    successor = store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-b",
+        scope="task",
+        lease_seconds=30,
+    )
+    assert successor["acquired"] is True
+
+    still_pending = store.get(task.id)
+    assert any(
+        blocker.startswith("[reach:pending-mutation]")
+        for blocker in still_pending.continuity.blockers
+    )
+
+    reconciled = store.update(
+        task.id,
+        reconcile_mutation="Successor verified the owned postcondition.",
+        task_lease_id=successor["lease_id"],
+    )
+    assert not any(
+        blocker.startswith("[reach:pending-mutation]")
+        for blocker in reconciled.continuity.blockers
+    )

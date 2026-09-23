@@ -94,6 +94,11 @@ class AgentExecutionInput(BaseModel):
         default="normal",
         description="Execution resource class. Use heavy only for workloads that should obey a target heavy-concurrency limit.",
     )
+    task_lease_id: str | None = Field(
+        default=None,
+        pattern=r"^tlease-[0-9a-f]{32}$",
+        description="Matching active Task execution lease when the linked Task is leased.",
+    )
 
     @field_validator("purpose", mode="before")
     @classmethod
@@ -203,6 +208,7 @@ class CancelRunInput(BaseModel):
 
     run_id: str = Field(min_length=1, max_length=128)
     confirm: bool = False
+    task_lease_id: str | None = Field(default=None, pattern=r"^tlease-[0-9a-f]{32}$")
 
 
 class ListTasksInput(BaseModel):
@@ -245,6 +251,7 @@ class UpdateTaskInput(BaseModel):
     continuity: TaskContinuity | None = None
     reconcile_mutation: str | None = Field(default=None, min_length=1, max_length=900)
     retained: bool | None = None
+    task_lease_id: str | None = Field(default=None, pattern=r"^tlease-[0-9a-f]{32}$")
 
 
 class CloseTaskInput(BaseModel):
@@ -261,12 +268,37 @@ class CloseTaskInput(BaseModel):
     clear_next_action: bool = False
     continuity: TaskContinuity | None = None
     retained: bool | None = None
+    task_lease_id: str | None = Field(default=None, pattern=r"^tlease-[0-9a-f]{32}$")
 
 
 class ArchiveTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(min_length=1, max_length=128)
+
+
+class AcquireTaskLeaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    executor_id: str = Field(min_length=1, max_length=256)
+    scope: str = Field(min_length=1, max_length=512)
+    lease_seconds: int = Field(ge=30, le=3600)
+
+
+class RefreshTaskLeaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    lease_id: str = Field(pattern=r"^tlease-[0-9a-f]{32}$")
+    lease_seconds: int = Field(ge=30, le=3600)
+
+
+class ReleaseTaskLeaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=128)
+    lease_id: str = Field(pattern=r"^tlease-[0-9a-f]{32}$")
 
 
 class ListCandidatesInput(BaseModel):
@@ -479,12 +511,20 @@ def _candidate_store() -> CandidateStore:
 
 
 def _prepare_task_execution(
-    *, task_id: str | None, may_mutate: bool, purpose: str
+    *,
+    task_id: str | None,
+    may_mutate: bool,
+    purpose: str,
+    task_lease_id: str | None = None,
 ) -> None:
     if task_id is None:
         return
     if may_mutate:
-        _task_store().mark_mutation_pending(task_id, purpose=purpose)
+        _task_store().mark_mutation_pending(
+            task_id,
+            purpose=purpose,
+            task_lease_id=task_lease_id,
+        )
     else:
         _task_store().require_open(task_id)
 
@@ -505,6 +545,7 @@ async def _tracked_ssh_run(
     lease_root: str | None = None,
     idempotent: bool | None = None,
     task_id: str | None = None,
+    task_lease_id: str | None = None,
     stdin_text: str | None = None,
     script_id: str | None = None,
     script_source: str | None = None,
@@ -520,7 +561,12 @@ async def _tracked_ssh_run(
             max_heavy_concurrency=target.max_heavy_concurrency,
         )
     try:
-        _prepare_task_execution(task_id=task_id, may_mutate=may_mutate, purpose=purpose)
+        _prepare_task_execution(
+            task_id=task_id,
+            may_mutate=may_mutate,
+            purpose=purpose,
+            task_lease_id=task_lease_id,
+        )
         store = _run_store()
         record = store.create(
             operation=operation,
@@ -1009,6 +1055,49 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="acquire_task_lease",
+            description=(
+                "Acquire the bounded exclusive execution lease for one open Task. "
+                "If another unexpired executor owns the Task, return acquired=false "
+                "and the current owner state without changing Task content."
+            ),
+            inputSchema=AcquireTaskLeaseInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="refresh_task_lease",
+            description=(
+                "Refresh the matching active Task execution lease for a bounded lifetime. "
+                "This changes ownership metadata only and never reconciles pending mutation."
+            ),
+            inputSchema=RefreshTaskLeaseInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
+            name="release_task_lease",
+            description=(
+                "Release the matching active Task execution lease for explicit handoff. "
+                "This changes ownership metadata only and never clears Task blockers."
+            ),
+            inputSchema=ReleaseTaskLeaseInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=False,
+            ),
+        ),
+        types.Tool(
             name="create_task",
             description=(
                 "Create durable local continuity state for substantial or interruption-prone "
@@ -1416,6 +1505,27 @@ async def call_tool(
         elif name == "get_task":
             args = GetTaskInput(**arguments)
             result = _task_store().get(args.task_id).model_dump()
+        elif name == "acquire_task_lease":
+            args = AcquireTaskLeaseInput(**arguments)
+            result = _task_store().acquire_execution_lease(
+                args.task_id,
+                executor_id=args.executor_id,
+                scope=args.scope,
+                lease_seconds=args.lease_seconds,
+            )
+        elif name == "refresh_task_lease":
+            args = RefreshTaskLeaseInput(**arguments)
+            result = _task_store().refresh_execution_lease(
+                args.task_id,
+                lease_id=args.lease_id,
+                lease_seconds=args.lease_seconds,
+            )
+        elif name == "release_task_lease":
+            args = ReleaseTaskLeaseInput(**arguments)
+            result = _task_store().release_execution_lease(
+                args.task_id,
+                lease_id=args.lease_id,
+            )
         elif name == "create_task":
             args = CreateTaskInput(**arguments)
             result = _task_store().create(
@@ -1441,6 +1551,7 @@ async def call_tool(
                 continuity=args.continuity,
                 reconcile_mutation=args.reconcile_mutation,
                 retained=args.retained,
+                task_lease_id=args.task_lease_id,
             ).model_dump()
         elif name == "close_task":
             args = CloseTaskInput(**arguments)
@@ -1456,6 +1567,7 @@ async def call_tool(
                 clear_next_action=args.clear_next_action,
                 continuity=args.continuity,
                 retained=args.retained,
+                task_lease_id=args.task_lease_id,
             ).model_dump()
         elif name == "archive_task":
             args = ArchiveTaskInput(**arguments)
@@ -1482,6 +1594,7 @@ async def call_tool(
                 lease_root=_config.workspace.runs,
                 idempotent=script.metadata.idempotent,
                 task_id=args.task_id,
+                task_lease_id=args.task_lease_id,
                 stdin_text=script.content,
                 script_id=script.metadata.id,
                 script_source=script.source_id,
@@ -1505,7 +1618,10 @@ async def call_tool(
             )
             ensure_target_compatible(script, target.capabilities)
             _prepare_task_execution(
-                task_id=args.task_id, may_mutate=script.metadata.mutating, purpose=args.purpose
+                task_id=args.task_id,
+                may_mutate=script.metadata.mutating,
+                purpose=args.purpose,
+                task_lease_id=args.task_lease_id,
             )
             result = await _submit_async_execution(
                 ExecutionSubmission(
@@ -1530,11 +1646,25 @@ async def call_tool(
             args = CancelRunInput(**arguments)
             if not args.confirm:
                 raise ValueError("cancel_run requires confirm=true")
+            try:
+                run_record = _run_store().get(args.run_id)
+            except ValueError:
+                run_record = None
+            if run_record is not None and run_record.task_id is not None:
+                _task_store().authorize_execution_lease(
+                    run_record.task_id,
+                    task_lease_id=args.task_lease_id,
+                )
             result = await _cancel_async_execution(args.run_id)
         elif name == "start_command":
             args = CommandInput(**arguments)
             _target_runtime(args.target, args.timeout_seconds, synchronous=False)
-            _prepare_task_execution(task_id=args.task_id, may_mutate=True, purpose=args.purpose)
+            _prepare_task_execution(
+                task_id=args.task_id,
+                may_mutate=True,
+                purpose=args.purpose,
+                task_lease_id=args.task_lease_id,
+            )
             result = await _submit_async_execution(
                 ExecutionSubmission(
                     operation="run_command",
@@ -1567,12 +1697,18 @@ async def call_tool(
                 execution_class=args.execution_class,
                 lease_root=_config.workspace.runs,
                 task_id=args.task_id,
+                task_lease_id=args.task_lease_id,
             )
             result = {"run_id": run_id, "execution": execution}
         elif name == "start_shell":
             args = ShellInput(**arguments)
             _target_runtime(args.target, args.timeout_seconds, synchronous=False)
-            _prepare_task_execution(task_id=args.task_id, may_mutate=True, purpose=args.purpose)
+            _prepare_task_execution(
+                task_id=args.task_id,
+                may_mutate=True,
+                purpose=args.purpose,
+                task_lease_id=args.task_lease_id,
+            )
             result = await _submit_async_execution(
                 ExecutionSubmission(
                     operation="run_shell",
@@ -1606,6 +1742,7 @@ async def call_tool(
                 execution_class=args.execution_class,
                 lease_root=_config.workspace.runs,
                 task_id=args.task_id,
+                task_lease_id=args.task_lease_id,
                 stdin_text=args.script,
             )
             result = {"run_id": run_id, "execution": execution}

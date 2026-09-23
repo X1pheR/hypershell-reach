@@ -222,3 +222,26 @@ def test_migration_refuses_nonempty_target_without_deleting_existing_data(tmp_pa
 
     assert sentinel.read_text(encoding="utf-8") == "existing target data\n"
     assert target_archive.is_dir()
+
+def test_active_execution_lease_blocks_task_storage_migration(tmp_path) -> None:
+    source_active = tmp_path / "source-active"
+    source_archive = tmp_path / "source-archive"
+    target_active = tmp_path / "target-active"
+    target_archive = tmp_path / "target-archive"
+
+    store = TaskStore(source_active, source_archive)
+    task = store.create(title="Leased migration", objective="Do not drop active ownership.")
+    store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-owner",
+        scope="task",
+        lease_seconds=120,
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected task directory entries"):
+        copy_and_validate_task_storage(
+            source_active,
+            source_archive,
+            target_active,
+            target_archive,
+        )

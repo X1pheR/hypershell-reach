@@ -7,6 +7,7 @@ import pytest
 from hypershell_reach import server
 from hypershell_reach.config import ReachConfig
 from hypershell_reach.runs import RunStore
+from hypershell_reach.tasks import TaskStore
 
 
 def _config(tmp_path) -> ReachConfig:
@@ -479,3 +480,57 @@ async def test_await_run_terminal_delegates_to_live_executor_without_replay(
     assert result["run_id"] == run_id
     assert result["terminal"] is True
     assert result["status"] == "succeeded"
+
+@pytest.mark.asyncio
+async def test_cancel_run_requires_task_lease_for_task_owned_run(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    config.executor.socket_path = str(tmp_path / "executor.sock")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    task_store = TaskStore(config.workspace.tasks, config.workspace.trash)
+    run_store = RunStore(config.workspace.runs)
+    monkeypatch.setattr(server, "_task_store_instance", task_store)
+    monkeypatch.setattr(server, "_run_store_instance", run_store)
+
+    task = task_store.create(title="Lease cancel", objective="Protect owned execution.")
+    lease = task_store.acquire_execution_lease(
+        task.id,
+        executor_id="chat-owner",
+        scope="task",
+        lease_seconds=120,
+    )
+    run = run_store.create(
+        operation="run_command",
+        target="example",
+        timeout_seconds=30,
+        may_mutate=True,
+        execution_mode="async",
+        purpose="Owned durable work.",
+        task_id=task.id,
+    )
+
+    cancelled = 0
+
+    async def fake_cancel_execution(current_config, run_id):
+        nonlocal cancelled
+        cancelled += 1
+        return {"run_id": run_id, "status": "interrupted", "cancelled": True}
+
+    monkeypatch.setattr(server, "cancel_execution", fake_cancel_execution)
+
+    stale = (await server.call_tool(
+        "cancel_run",
+        {"run_id": run.id, "confirm": True},
+    ))[0].text
+    assert stale.startswith("ERROR: active task execution lease")
+    assert cancelled == 0
+
+    owned = json.loads((await server.call_tool(
+        "cancel_run",
+        {
+            "run_id": run.id,
+            "confirm": True,
+            "task_lease_id": lease["lease_id"],
+        },
+    ))[0].text)
+    assert owned["cancelled"] is True
+    assert cancelled == 1

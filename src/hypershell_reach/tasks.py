@@ -22,6 +22,9 @@ _TASK_ID = re.compile(r"^task-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _OPEN_STATUSES = {"active", "partial", "blocked"}
 _TERMINAL_STATUSES = {"completed", "cancelled"}
 PENDING_MUTATION_BLOCKER_PREFIX = "[reach:pending-mutation]"
+_TASK_LEASE_ID = re.compile(r"^tlease-[0-9a-f]{32}$")
+_TASK_LEASE_MIN_SECONDS = 30
+_TASK_LEASE_MAX_SECONDS = 3600
 
 
 def utc_now() -> datetime:
@@ -69,6 +72,18 @@ class TaskContinuity(BaseModel):
     recovery: str | None = Field(default=None, min_length=1, max_length=2_000)
     blockers: list[BoundedTaskText] = Field(default_factory=list, max_length=25)
     assumptions: list[TaskAssumption] = Field(default_factory=list, max_length=20)
+
+
+class TaskExecutionLease(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    lease_id: str = Field(pattern=r"^tlease-[0-9a-f]{32}$")
+    executor_id: str = Field(min_length=1, max_length=256)
+    scope: str = Field(min_length=1, max_length=512)
+    acquired_at: str
+    refreshed_at: str
+    expires_at: str
 
 
 class TaskRecord(BaseModel):
@@ -148,6 +163,9 @@ class TaskStore:
 
     def _record_path(self, directory: Path) -> Path:
         return directory / "task.yaml"
+
+    def _lease_path(self, directory: Path) -> Path:
+        return directory / "execution-lease.yaml"
 
     def _validate_directory_entry(self, directory: Path) -> None:
         if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
@@ -250,6 +268,218 @@ class TaskStore:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+
+    def _atomic_write_execution_lease(
+        self,
+        directory: Path,
+        lease: TaskExecutionLease,
+    ) -> None:
+        self._require_writable()
+        path = self._lease_path(directory)
+        temporary = directory / f".execution-lease.{uuid4().hex}.tmp"
+        payload = yaml.safe_dump(
+            lease.model_dump(),
+            sort_keys=False,
+            allow_unicode=True,
+            default_flow_style=False,
+        )
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            self._fsync_directory(directory)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _read_execution_lease(self, directory: Path) -> TaskExecutionLease | None:
+        path = self._lease_path(directory)
+        if not path.exists():
+            return None
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f"invalid task execution lease: {directory.name}")
+        try:
+            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            return TaskExecutionLease.model_validate(payload)
+        except (OSError, yaml.YAMLError, ValidationError) as exc:
+            raise RuntimeError(f"invalid task execution lease: {directory.name}") from exc
+
+    def _active_execution_lease(self, directory: Path) -> TaskExecutionLease | None:
+        lease = self._read_execution_lease(directory)
+        if lease is None:
+            return None
+        if parse_timestamp(lease.expires_at) > self._now():
+            return lease
+        self._lease_path(directory).unlink(missing_ok=True)
+        self._fsync_directory(directory)
+        return None
+
+    def _require_execution_lease(
+        self,
+        directory: Path,
+        task_lease_id: str | None,
+    ) -> TaskExecutionLease | None:
+        lease = self._active_execution_lease(directory)
+        if lease is None:
+            return None
+        if task_lease_id != lease.lease_id:
+            raise ValueError(
+                "active task execution lease requires matching task_lease_id"
+            )
+        return lease
+
+    def acquire_execution_lease(
+        self,
+        task_id: str,
+        *,
+        executor_id: str,
+        scope: str,
+        lease_seconds: int,
+    ) -> dict[str, object]:
+        self._require_writable()
+        if not executor_id or len(executor_id) > 256:
+            raise ValueError("executor_id length is invalid")
+        if not scope or len(scope) > 512:
+            raise ValueError("scope length is invalid")
+        if not _TASK_LEASE_MIN_SECONDS <= lease_seconds <= _TASK_LEASE_MAX_SECONDS:
+            raise ValueError(
+                f"lease_seconds must be between {_TASK_LEASE_MIN_SECONDS} and {_TASK_LEASE_MAX_SECONDS}"
+            )
+        with self._lock(task_id):
+            directory = self._current_dir(task_id)
+            archived = self._archived_dir(task_id)
+            self._validate_directory_entry(directory)
+            self._validate_directory_entry(archived)
+            if archived.exists():
+                raise ValueError(f"task is archived: {task_id}")
+            if not directory.is_dir():
+                raise ValueError(f"unknown task: {task_id}")
+            record = self._read_dir(directory)
+            if record.status not in _OPEN_STATUSES:
+                raise ValueError(f"task is terminal: {task_id}")
+            current = self._active_execution_lease(directory)
+            if current is not None:
+                same_owner = current.executor_id == executor_id and current.scope == scope
+                return {
+                    "acquired": same_owner,
+                    "lease_id": current.lease_id if same_owner else None,
+                    "owner_state": current.model_dump(),
+                    "handoff_state": "owned" if same_owner else "busy",
+                }
+            now = self._now()
+            lease = TaskExecutionLease(
+                lease_id=f"tlease-{uuid4().hex}",
+                executor_id=executor_id,
+                scope=scope,
+                acquired_at=format_timestamp(now),
+                refreshed_at=format_timestamp(now),
+                expires_at=format_timestamp(now + timedelta(seconds=lease_seconds)),
+            )
+            self._atomic_write_execution_lease(directory, lease)
+            return {
+                "acquired": True,
+                "lease_id": lease.lease_id,
+                "owner_state": lease.model_dump(),
+                "handoff_state": "acquired",
+            }
+
+    def refresh_execution_lease(
+        self,
+        task_id: str,
+        *,
+        lease_id: str,
+        lease_seconds: int,
+    ) -> dict[str, object]:
+        self._require_writable()
+        if not _TASK_LEASE_ID.fullmatch(lease_id):
+            raise ValueError("invalid task execution lease ID")
+        if not _TASK_LEASE_MIN_SECONDS <= lease_seconds <= _TASK_LEASE_MAX_SECONDS:
+            raise ValueError(
+                f"lease_seconds must be between {_TASK_LEASE_MIN_SECONDS} and {_TASK_LEASE_MAX_SECONDS}"
+            )
+        with self._lock(task_id):
+            directory = self._current_dir(task_id)
+            record = self.require_open(task_id)
+            if record.id != task_id:
+                raise RuntimeError("task identity mismatch")
+            current = self._active_execution_lease(directory)
+            if current is None:
+                raise ValueError("task execution lease is not active")
+            if current.lease_id != lease_id:
+                raise ValueError("task execution lease does not match")
+            now = self._now()
+            refreshed = current.model_copy(
+                update={
+                    "refreshed_at": format_timestamp(now),
+                    "expires_at": format_timestamp(now + timedelta(seconds=lease_seconds)),
+                }
+            )
+            self._atomic_write_execution_lease(directory, refreshed)
+            return {
+                "acquired": True,
+                "lease_id": refreshed.lease_id,
+                "owner_state": refreshed.model_dump(),
+                "handoff_state": "refreshed",
+            }
+
+    def release_execution_lease(
+        self,
+        task_id: str,
+        *,
+        lease_id: str,
+    ) -> dict[str, object]:
+        self._require_writable()
+        if not _TASK_LEASE_ID.fullmatch(lease_id):
+            raise ValueError("invalid task execution lease ID")
+        with self._lock(task_id):
+            directory = self._current_dir(task_id)
+            record = self.require_open(task_id)
+            if record.id != task_id:
+                raise RuntimeError("task identity mismatch")
+            current = self._active_execution_lease(directory)
+            if current is None:
+                return {
+                    "acquired": False,
+                    "lease_id": None,
+                    "owner_state": None,
+                    "handoff_state": "released",
+                }
+            if current.lease_id != lease_id:
+                raise ValueError("task execution lease does not match")
+            self._lease_path(directory).unlink()
+            self._fsync_directory(directory)
+            return {
+                "acquired": False,
+                "lease_id": None,
+                "owner_state": current.model_dump(),
+                "handoff_state": "released",
+            }
+
+    def authorize_execution_lease(
+        self,
+        task_id: str,
+        *,
+        task_lease_id: str | None,
+    ) -> TaskExecutionLease | None:
+        self._require_writable()
+        with self._lock(task_id):
+            directory = self._current_dir(task_id)
+            archived = self._archived_dir(task_id)
+            self._validate_directory_entry(directory)
+            self._validate_directory_entry(archived)
+            if archived.exists():
+                raise ValueError(f"task is archived: {task_id}")
+            if not directory.is_dir():
+                raise ValueError(f"unknown task: {task_id}")
+            record = self._read_dir(directory)
+            if record.status not in _OPEN_STATUSES:
+                raise ValueError(f"task is terminal: {task_id}")
+            return self._require_execution_lease(directory, task_lease_id)
 
     def _read_dir(self, directory: Path) -> TaskRecord:
         if directory.is_symlink() or not directory.is_dir():
@@ -469,7 +699,13 @@ class TaskStore:
             return False
         return True
 
-    def mark_mutation_pending(self, task_id: str, *, purpose: str) -> TaskRecord:
+    def mark_mutation_pending(
+        self,
+        task_id: str,
+        *,
+        purpose: str,
+        task_lease_id: str | None = None,
+    ) -> TaskRecord:
         self._require_writable()
         with self._lock(task_id):
             directory = self._current_dir(task_id)
@@ -483,6 +719,7 @@ class TaskStore:
             if not directory.is_dir():
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
+            self._require_execution_lease(directory, task_lease_id)
             if record.status not in _OPEN_STATUSES:
                 raise ValueError(f"task is terminal: {task_id}")
             blockers = [
@@ -514,6 +751,7 @@ class TaskStore:
         continuity: TaskContinuity | None = None,
         reconcile_mutation: str | None = None,
         retained: bool | None = None,
+        task_lease_id: str | None = None,
     ) -> TaskRecord:
         self._require_writable()
         self._validate_edit_args(
@@ -537,6 +775,7 @@ class TaskStore:
                 clear_next_action=clear_next_action,
                 continuity=continuity,
                 retained=retained,
+                task_lease_id=task_lease_id,
             )
         with self._lock(task_id):
             directory = self._current_dir(task_id)
@@ -553,6 +792,7 @@ class TaskStore:
             if not directory.is_dir():
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
+            self._require_execution_lease(directory, task_lease_id)
             if record.status in _TERMINAL_STATUSES:
                 if status is not None and status != record.status:
                     raise ValueError("terminal task status cannot be changed")
@@ -636,6 +876,7 @@ class TaskStore:
         clear_next_action: bool = False,
         continuity: TaskContinuity | None = None,
         retained: bool | None = None,
+        task_lease_id: str | None = None,
     ) -> TaskRecord:
         self._require_writable()
         self._validate_edit_args(
@@ -665,6 +906,8 @@ class TaskStore:
                     continuity=continuity,
                     retained=retained,
                 ):
+                    self._lease_path(archived).unlink(missing_ok=True)
+                    self._fsync_directory(archived)
                     self._fsync_directory(self.tasks_root)
                     self._fsync_directory(self.trash_root)
                     return record
@@ -674,6 +917,7 @@ class TaskStore:
             if not current.is_dir():
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(current)
+            self._require_execution_lease(current, task_lease_id)
             if record.status in _TERMINAL_STATUSES and record.status != status:
                 raise ValueError("terminal task status cannot be changed")
             if record.status in _TERMINAL_STATUSES and record.archived_at is not None:
@@ -691,6 +935,8 @@ class TaskStore:
                 ):
                     raise ValueError(f"task has committed terminal state with different final data: {task_id}")
                 self._move_to_archive(current, archived)
+                self._lease_path(archived).unlink(missing_ok=True)
+                self._fsync_directory(archived)
                 return self._read_dir(archived)
             if expected_revision is not None and record.revision != expected_revision:
                 raise ValueError(
@@ -721,6 +967,8 @@ class TaskStore:
                 raise ValueError("completed task cannot retain blockers")
             self._atomic_write(current, updated)
             self._move_to_archive(current, archived)
+            self._lease_path(archived).unlink(missing_ok=True)
+            self._fsync_directory(archived)
             return self._read_dir(archived)
 
     def archive(self, task_id: str) -> TaskRecord:

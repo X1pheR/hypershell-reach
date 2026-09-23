@@ -137,19 +137,25 @@ Exit `0` means the exact count matched, `1` means the observed count differed an
 
 Read active or archived Task continuity records. Task v1 YAML remains readable without an implicit rewrite. Task v2 records expose a monotonic `revision`; compact listings include both `schema_version` and `revision`.
 
+### Task execution leases
+
+`acquire_task_lease` establishes one bounded exclusive executor for an open Task and returns an opaque `tlease-...` lease ID plus the active owner state. A second executor receives `acquired=false` and the current `executor_id`, `scope` and expiry instead of taking ownership. `refresh_task_lease` extends only the matching lease. `release_task_lease` performs explicit handoff. Lease metadata is stored separately from `task.yaml`, so acquire/refresh/release do not increment the Task revision or rewrite continuity state.
+
+While a lease is active, Task-linked mutating execution, `update_task`, `close_task`, and cancellation of a locally known Task-owned asynchronous Run require the matching `task_lease_id`. Read-only Task-linked execution remains available without the token. Lease expiry removes only execution ownership: it never clears `[reach:pending-mutation]`, never reconciles postconditions and never authorizes replay of ambiguous work. Tasks without an active lease retain the pre-lease compatibility behavior.
+
 ### `create_task`
 
 Creates a Task v2 record at revision `1` in the configured active Task root. A Task record contains logical continuity state only: it does not persist its filesystem path, an evidence path, secrets, or Run backlinks. New Tasks do not create an `evidence/` directory.
 
 ### `update_task`
 
-Applies a typed partial update to one Task. `continuity` is merge-patched: fields omitted from the request keep their committed values, while explicitly supplied fields replace that field; use an explicit empty list to clear a list field. Callers that perform read-modify-write flows should supply `expected_revision`; a stale value is rejected before state is committed. The argument remains optional for compatibility with the pre-v2 MCP contract, while all writes are serialized by a per-Task interprocess lock.
+Applies a typed partial update to one Task. When an execution lease is active, the caller must supply its matching `task_lease_id`. `continuity` is merge-patched: fields omitted from the request keep their committed values, while explicitly supplied fields replace that field; use an explicit empty list to clear a list field. Callers that perform read-modify-write flows should supply `expected_revision`; a stale value is rejected before state is committed. The argument remains optional for compatibility with the pre-v2 MCP contract, while all writes are serialized by a per-Task interprocess lock.
 
 When a Task-linked Reach execution is potentially mutating, Reach writes one reserved `[reach:pending-mutation]` blocker before dispatch/submission. `update_task(reconcile_mutation=...)` is the explicit evidence-bearing release path: it removes only the generated mutation blocker and appends the supplied postcondition evidence to `continuity.validation`. A continuity patch cannot silently remove that generated blocker. A terminal `status` routes through the same server-owned close boundary as `close_task`, so reconciliation must occur before terminal close.
 
 ### `close_task`
 
-Closes one Task as `completed` or `cancelled`. The server owns the complete boundary: final Task validation, revision increment, durable YAML replacement, Task-directory move to the archive root, and required directory fsyncs. A new `completed` close fails closed while `next_action` is still set or any continuity blocker remains, including the generated pending-mutation blocker. `cancelled` remains available for abandoned work that intentionally ends with unresolved state. Retrying the same committed final state is idempotent, including recovery when the final record or archive rename committed before the caller received success.
+Closes one Task as `completed` or `cancelled`. When an execution lease is active, the matching `task_lease_id` is required; committed closure removes lease metadata. The server owns the complete boundary: final Task validation, revision increment, durable YAML replacement, Task-directory move to the archive root, and required directory fsyncs. A new `completed` close fails closed while `next_action` is still set or any continuity blocker remains, including the generated pending-mutation blocker. `cancelled` remains available for abandoned work that intentionally ends with unresolved state. Retrying the same committed final state is idempotent, including recovery when the final record or archive rename committed before the caller received success.
 
 ### `archive_task`
 
@@ -207,7 +213,7 @@ Accepted asynchronous work is owned by the executor, not by the requesting MCP c
 
 ### `run_command` / `start_command`
 
-Both execute one non-interactive command on one configured target. `purpose` is required and must explain why the execution exists without copying command text, argument values, environment values or secrets into persisted state. `run_command` returns the bounded execution result synchronously; `start_command` returns durable acceptance and a Run ID. Commands are never retried automatically.
+Both execute one non-interactive command on one configured target. A Task-linked mutating call must also supply the matching active `task_lease_id` when that Task is leased. `purpose` is required and must explain why the execution exists without copying command text, argument values, environment values or secrets into persisted state. `run_command` returns the bounded execution result synchronously; `start_command` returns durable acceptance and a Run ID. Commands are never retried automatically.
 
 ### `run_shell` / `start_shell`
 
@@ -223,6 +229,6 @@ Waits for one existing Run for a caller-selected bounded window of 0 to 90 secon
 
 ### `cancel_run`
 
-Cancels one running asynchronous Run through its owning executor and requires `confirm=true`. Cancellation is idempotent for an already terminal Run and never starts or retries execution. A normal MCP disconnect does not imply cancellation.
+Cancels one running asynchronous Run through its owning executor and requires `confirm=true`. If the persisted Run is linked to a Task with an active execution lease, the matching `task_lease_id` is also required. Cancellation is idempotent for an already terminal Run and never starts or retries execution. A normal MCP disconnect does not imply cancellation.
 
 For all six execution tools, purpose is normalized by trimming outer whitespace and must then contain 1 to 512 printable characters on one line. Historical Run v1 records can still be returned by `list_runs` and `get_run`; they expose `purpose: null` and `result_summary: null`. New Run v3 records add `execution_mode: sync|async` while preserving the bounded server-generated result summary introduced in v2. See [Runs and tasks](runs-and-tasks.md) for the persisted safety and compatibility contract.

@@ -376,3 +376,270 @@ async def test_task_linked_async_mutation_marks_reconciliation_before_submission
     assert json.loads(result[0].text)["status"] == "running"
     assert len(blockers_seen_at_submission) == 1
     assert blockers_seen_at_submission[0].startswith("[reach:pending-mutation]")
+
+@pytest.mark.asyncio
+async def test_server_exposes_exclusive_task_execution_lease(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+    created = json.loads((await server.call_tool(
+        "create_task",
+        {"title": "Lease MCP", "objective": "Expose exclusive ownership."},
+    ))[0].text)
+
+    first = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-a",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+    second = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-b",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+
+    assert first["acquired"] is True
+    assert second["acquired"] is False
+    assert second["owner_state"]["executor_id"] == "chat-a"
+
+@pytest.mark.asyncio
+async def test_server_refreshes_and_releases_task_execution_lease(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+    created = json.loads((await server.call_tool(
+        "create_task",
+        {"title": "Lease lifecycle MCP", "objective": "Refresh and hand off ownership."},
+    ))[0].text)
+    acquired = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-a",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+
+    refreshed = json.loads((await server.call_tool(
+        "refresh_task_lease",
+        {
+            "task_id": created["id"],
+            "lease_id": acquired["lease_id"],
+            "lease_seconds": 300,
+        },
+    ))[0].text)
+    assert refreshed["handoff_state"] == "refreshed"
+
+    released = json.loads((await server.call_tool(
+        "release_task_lease",
+        {"task_id": created["id"], "lease_id": acquired["lease_id"]},
+    ))[0].text)
+    assert released["handoff_state"] == "released"
+
+    successor = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-b",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+    assert successor["acquired"] is True
+    assert successor["owner_state"]["executor_id"] == "chat-b"
+
+@pytest.mark.asyncio
+async def test_task_lease_blocks_stale_mutating_execution_before_dispatch(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", RunStore(config.workspace.runs))
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+    created = json.loads((await server.call_tool(
+        "create_task",
+        {"title": "Lease dispatch", "objective": "Reject stale mutation."},
+    ))[0].text)
+    lease = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-owner",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+
+    dispatches = 0
+
+    async def fake_run_ssh(**kwargs):
+        nonlocal dispatches
+        dispatches += 1
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "ok", "bytes": 2, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+
+    stale = (await server.call_tool(
+        "run_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Attempt stale mutation.",
+            "task_id": created["id"],
+        },
+    ))[0].text
+    assert stale.startswith("ERROR: active task execution lease")
+    assert dispatches == 0
+
+    owned = json.loads((await server.call_tool(
+        "run_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Perform owned mutation.",
+            "task_id": created["id"],
+            "task_lease_id": lease["lease_id"],
+        },
+    ))[0].text)
+    assert owned["execution"]["status"] == "succeeded"
+    assert dispatches == 1
+
+@pytest.mark.asyncio
+async def test_task_lease_guards_task_update_and_close(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+    created = json.loads((await server.call_tool(
+        "create_task",
+        {"title": "Lease edits", "objective": "Guard continuity mutations."},
+    ))[0].text)
+    lease = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-owner",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+
+    stale_update = (await server.call_tool(
+        "update_task",
+        {"task_id": created["id"], "title": "stale"},
+    ))[0].text
+    assert stale_update.startswith("ERROR: active task execution lease")
+
+    owned = json.loads((await server.call_tool(
+        "update_task",
+        {
+            "task_id": created["id"],
+            "title": "owned",
+            "task_lease_id": lease["lease_id"],
+        },
+    ))[0].text)
+    assert owned["title"] == "owned"
+
+    stale_close = (await server.call_tool(
+        "close_task",
+        {"task_id": created["id"], "status": "completed"},
+    ))[0].text
+    assert stale_close.startswith("ERROR: active task execution lease")
+
+    closed = json.loads((await server.call_tool(
+        "close_task",
+        {
+            "task_id": created["id"],
+            "status": "completed",
+            "task_lease_id": lease["lease_id"],
+        },
+    ))[0].text)
+    assert closed["status"] == "completed"
+
+@pytest.mark.asyncio
+async def test_task_lease_guards_async_start_command_before_submission(tmp_path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", RunStore(config.workspace.runs))
+    monkeypatch.setattr(
+        server,
+        "_task_store_instance",
+        TaskStore(config.workspace.tasks, config.workspace.trash),
+    )
+    created = json.loads((await server.call_tool(
+        "create_task",
+        {"title": "Lease async", "objective": "Reject stale durable submission."},
+    ))[0].text)
+    lease = json.loads((await server.call_tool(
+        "acquire_task_lease",
+        {
+            "task_id": created["id"],
+            "executor_id": "chat-owner",
+            "scope": "task",
+            "lease_seconds": 120,
+        },
+    ))[0].text)
+
+    submissions = 0
+
+    async def fake_submit(submission):
+        nonlocal submissions
+        submissions += 1
+        return {"run_id": "run-20260923T100000000000Z-abcdef123456", "status": "running"}
+
+    monkeypatch.setattr(server, "_submit_async_execution", fake_submit)
+
+    stale = (await server.call_tool(
+        "start_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Attempt stale durable mutation.",
+            "task_id": created["id"],
+        },
+    ))[0].text
+    assert stale.startswith("ERROR: active task execution lease")
+    assert submissions == 0
+
+    owned = json.loads((await server.call_tool(
+        "start_command",
+        {
+            "target": "example",
+            "command": "true",
+            "purpose": "Submit owned durable mutation.",
+            "task_id": created["id"],
+            "task_lease_id": lease["lease_id"],
+        },
+    ))[0].text)
+    assert owned["status"] == "running"
+    assert submissions == 1
