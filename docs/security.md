@@ -49,3 +49,31 @@ Skill content can contain unsafe or irrelevant instructions. Loading a skill doe
 ## Secrets
 
 Do not put private keys or secret values in Hypershell Reach configuration, tool metadata, logs, run records or task records. Secret files are referenced by path and mounted separately by the deployment.
+
+## Container dependency gate
+
+The service image uses digest-pinned Ubuntu 24.04 with distribution-maintained
+Python 3.12 and OpenSSH. Build-time package updates are followed by an enforced
+OpenSSH package floor of `1:9.6p1-3ubuntu13.18`, which includes the upstream
+CVE-2026-60002 client rekey fix. Reach must not ship a vulnerable SSH client merely
+because target hosts are fixed and host keys are pinned. Python downloads are
+disabled during dependency installation; uv remains independently digest-pinned.
+The service UID/GID, command, configuration paths and execution restrictions are
+unchanged. Deployment still supplies a read-only root, dropped capabilities and
+no-new-privileges.
+
+This replaces the prior Bookworm base because its maintained OpenSSH package
+still carried the client defect at the 2026-09-27 release review. It adds no custom
+SSH patch or client implementation. Verify the exact resulting image and both
+maintained architecture variants before deployment.
+
+References:
+- https://ubuntu.com/security/CVE-2026-60002
+- https://security-tracker.debian.org/tracker/CVE-2026-60002
+- https://www.openssh.org/releasenotes.html#10.4p1
+
+The local 2026-09-27 release review reproduced the failing SSH package floor on
+the prior image, then passed it on the updated runtime. Trivy 0.74.0 reported
+zero HIGH/CRITICAL vulnerabilities (including unfixed findings) and zero secrets
+for the updated image. These results are time-scoped evidence, not an exemption
+from scanning subsequent exact artifacts.
