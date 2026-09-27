@@ -83,11 +83,23 @@ The interpreter adds its own required capability automatically. A Bash script th
 
 ### Arguments
 
-Supported v1 types are `string`, `string_list`, `integer` and `boolean`.
+Supported v1 types are `string`, `string_list`, `integer`, `number` and `boolean`.
 
 String and `string_list` items may define `enum`, `pattern`, `min_length` and `max_length`. A `string_list` may additionally define `min_items` and `max_items`; absent bounds default to 1 and 64. Hypershell Reach serializes each item as a repeated flag rather than flattening the list into one string. Integer arguments may define `minimum` and `maximum`. Optional arguments are omitted from argv when absent. Unknown arguments fail validation.
 
 Strings and list items without an explicit `max_length` are limited to 4096 characters.
+
+### Bounded numeric arguments
+
+The additive `number` type supports fractional quantities without changing existing argument types.
+
+- **NUM-001:** A number accepts JSON integers and floats and produces one deterministic, round-trippable decimal argv value in metadata order. It never coerces a string or boolean.
+- **NUM-002:** Both `minimum` and `maximum` are required for number metadata, must be finite JSON numbers, and define an inclusive ordered interval. Non-finite values and out-of-range arguments fail before dispatch.
+- **NUM-003:** Existing string, string-list, integer and boolean validation, metadata compatibility, omitted-option behavior and unknown-argument rejection remain unchanged.
+- **NUM-004:** Registry detail exposes the exact type and numeric bounds. Sync and async managed execution use the same validator; no new execution, credential or persistence authority is introduced.
+
+Deploy a release supporting `number` before registering number-typed scripts. Remove those scripts before rolling back to an older Reach release. Existing scripts require no migration.
+
 
 ## Source safety
 

@@ -168,3 +168,53 @@ async def test_run_script_rejects_managed_timeout_above_synchronous_ceiling(tmp_
     assert content[0].text.startswith("ERROR:")
     assert "synchronous" in content[0].text.lower()
     assert "start_script" in content[0].text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["run_script", "start_script"])
+@pytest.mark.parametrize("value,valid", [
+    (750, True), (750.0, True), (750.125, True),
+    ("750.125", False), (True, False), (float("nan"), False),
+    (float("inf"), False), (-0.001, False), (1200.001, False),
+])
+async def test_num004_numeric_validation_precedes_dispatch(
+    tmp_path, monkeypatch, operation, value, valid
+):
+    path = tmp_path / "echo.sh"
+    _write_script(path)
+    text = path.read_text().replace(
+        "#     type: string", "#     type: number\n#     minimum: 0\n#     maximum: 1200"
+    )
+    path.write_text(text)
+    config = _config(tmp_path)
+    config.executor.socket_path = str(tmp_path / "executor.sock")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", None)
+    captured = []
+
+    async def fake_run_ssh(**kwargs):
+        captured.append(kwargs["remote_command"])
+        return {
+            "target": "example", "status": "succeeded", "exit_code": 0,
+            "timed_out": False, "duration_ms": 1,
+            "stdout": {"text": "", "bytes": 0, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    async def fake_submit(current_config, submission):
+        captured.append(submission.remote_command)
+        return {"run_id": "run-numeric", "status": "running", "execution_mode": "async"}
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    monkeypatch.setattr(server, "submit_execution", fake_submit)
+    content = await server.call_tool(operation, {
+        "script_id": "system.echo", "target": "example",
+        "purpose": "Verify bounded numeric execution.",
+        "arguments": {"message": value},
+    })
+    if valid:
+        assert not content[0].text.startswith("ERROR:")
+        assert captured == [f"bash -s -- --message {value}"]
+    else:
+        assert content[0].text.startswith("ERROR:")
+        assert captured == []

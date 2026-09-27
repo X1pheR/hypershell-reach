@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shlex
@@ -9,7 +10,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo,
+    field_validator, model_validator,
+)
 
 from .config import ToolSource
 
@@ -34,13 +38,14 @@ _SKIP_DIRS = {
 }
 _INTERPRETER_CAPABILITY = {"sh": "sh", "bash": "bash", "python3": "python3"}
 _BUNDLED_TOOLS_ROOT = Path(__file__).resolve().parent / "bundled_tools"
+_INTEGER_BOUND = TypeAdapter(int)
 
 
 class ArgumentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=63)
-    type: Literal["string", "string_list", "integer", "boolean"]
+    type: Literal["string", "string_list", "integer", "number", "boolean"]
     required: bool = True
     description: str | None = Field(default=None, max_length=300)
     enum: list[str] | None = None
@@ -49,8 +54,22 @@ class ArgumentSpec(BaseModel):
     max_length: int | None = Field(default=None, ge=1, le=32_768)
     min_items: int | None = Field(default=None, ge=0, le=256)
     max_items: int | None = Field(default=None, ge=1, le=256)
-    minimum: int | None = None
-    maximum: int | None = None
+    minimum: int | float | None = None
+    maximum: int | float | None = None
+
+    @field_validator("minimum", "maximum", mode="before")
+    @classmethod
+    def validate_numeric_bound(cls, value: Any, info: ValidationInfo) -> int | float | None:
+        if value is None:
+            return None
+        if info.data.get("type") == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("number bounds must be finite numbers")
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError("number bounds must be finite numbers")
+            return value
+        # Preserve the original int-field metadata conversion for existing types.
+        return _INTEGER_BOUND.validate_python(value)
 
     @field_validator("name")
     @classmethod
@@ -79,10 +98,12 @@ class ArgumentSpec(BaseModel):
             value is not None for value in (self.min_items, self.max_items)
         ):
             raise ValueError("item-count bounds require type=string_list")
-        if self.type != "integer" and any(
+        if self.type not in {"integer", "number"} and any(
             value is not None for value in (self.minimum, self.maximum)
         ):
-            raise ValueError("minimum and maximum require type=integer")
+            raise ValueError("minimum and maximum require type=integer or number")
+        if self.type == "number" and (self.minimum is None or self.maximum is None):
+            raise ValueError("type=number requires minimum and maximum")
         if self.enum is not None:
             if not self.enum:
                 raise ValueError("enum must not be empty")
@@ -373,6 +394,16 @@ def validate_script_arguments(script: ManagedScript, values: dict[str, Any]) -> 
         elif spec.type == "integer":
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"argument {spec.name} must be an integer")
+            if spec.minimum is not None and value < spec.minimum:
+                raise ValueError(f"argument {spec.name} is below minimum")
+            if spec.maximum is not None and value > spec.maximum:
+                raise ValueError(f"argument {spec.name} exceeds maximum")
+            argv.extend([flag, str(value)])
+        elif spec.type == "number":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"argument {spec.name} must be a number")
+            if isinstance(value, float) and not math.isfinite(value):
+                raise ValueError(f"argument {spec.name} must be finite")
             if spec.minimum is not None and value < spec.minimum:
                 raise ValueError(f"argument {spec.name} is below minimum")
             if spec.maximum is not None and value > spec.maximum:
