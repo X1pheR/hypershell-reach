@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 import fcntl
 import json
 import os
@@ -240,9 +242,19 @@ class RunStore:
         self.read_only = read_only
         self.reconcile_modes = reconcile_modes if reconcile_modes is not None else {"sync", "async"}
         self.write_lock_path = self.root / ".write.lock"
+        self.database_path = self.root / "runs.sqlite3"
+        self._database_seen = self.database_path.exists()
         if not self.read_only:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
+            self._initialize_database()
             self.reconcile_incomplete()
+
+    @property
+    def _legacy_read_only(self) -> bool:
+        # Read models may be constructed before service lifespan migrates Runs.
+        # Once observed, a missing database is an error, never stale JSON fallback.
+        self._database_seen = self._database_seen or self.database_path.exists()
+        return self.read_only and not self._database_seen
 
     def _path(self, run_id: str) -> Path:
         if not _RUN_ID.fullmatch(run_id):
@@ -264,10 +276,8 @@ class RunStore:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
-    def _atomic_write(self, record: RunRecord) -> None:
-        self._require_writable()
-        path = self._path(record.id)
-        temporary = self.root / f".{record.id}.{uuid4().hex}.tmp"
+    @staticmethod
+    def _serialize(record: RunRecord) -> str:
         serialized = record.model_dump()
         if record.schema_version == 1:
             serialized.pop("purpose", None)
@@ -277,19 +287,130 @@ class RunStore:
         if record.schema_version < 4:
             serialized.pop("result_ref", None)
             serialized.pop("execution_class", None)
-        payload = json.dumps(serialized, indent=2, sort_keys=True) + "\n"
+        return json.dumps(serialized, indent=2, sort_keys=True) + "\n"
+
+    @contextmanager
+    def _database(self):
+        if self.database_path.is_symlink():
+            raise RuntimeError("run database must not be a symlink")
+        # mode=rw never silently recreates a lost/corrupt accepted database.
+        mode = "ro" if self.read_only else "rw"
+        connection = sqlite3.connect(self.database_path.resolve().as_uri() + f"?mode={mode}", uri=True, timeout=5)
         try:
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
+            if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+                raise RuntimeError("unsupported run database version")
+            if self.read_only:
+                connection.execute("PRAGMA query_only=ON")
+            with connection:
+                yield connection
         finally:
+            connection.close()
+
+    @staticmethod
+    def _put(connection, record: RunRecord) -> None:
+        connection.execute(
+            "INSERT INTO runs(id,status,task_id,execution_mode,retained,ambiguous,ended_at,payload) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "status=excluded.status,task_id=excluded.task_id,execution_mode=excluded.execution_mode,"
+            "retained=excluded.retained,ambiguous=excluded.ambiguous,ended_at=excluded.ended_at,payload=excluded.payload",
+            (record.id, record.status, record.task_id, record.execution_mode, int(record.retained),
+             int(record.ambiguous), parse_timestamp(record.ended_at).timestamp() if record.ended_at else None,
+             RunStore._serialize(record)),
+        )
+
+    def _initialize_database(self) -> None:
+        with self._write_lock():
+            if self.database_path.exists() or self.database_path.is_symlink():
+                with self._database() as connection:
+                    connection.execute("SELECT id FROM runs LIMIT 1").fetchall()
+                return
+            temporary = self.root / f".runs-{uuid4().hex}.sqlite3"
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+            connection = None
             try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+                connection = sqlite3.connect(temporary)
+                connection.execute("PRAGMA synchronous=FULL")
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute("CREATE TABLE runs (id TEXT PRIMARY KEY, status TEXT NOT NULL, task_id TEXT, "
+                                   "execution_mode TEXT NOT NULL, retained INTEGER NOT NULL, ambiguous INTEGER NOT NULL, "
+                                   "ended_at REAL, payload TEXT NOT NULL)")
+                connection.execute("CREATE INDEX runs_status_id ON runs(status,id DESC)")
+                connection.execute("CREATE INDEX runs_task_id ON runs(task_id,id DESC)")
+                connection.execute("CREATE INDEX runs_task_status_id ON runs(task_id,status,id DESC)")
+                connection.execute("CREATE INDEX runs_cleanup ON runs(ended_at) WHERE retained=0 AND ambiguous=0")
+                connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                digest = hashlib.sha256()
+                count = 0
+                for path in sorted(self.root.glob("run-*.json")):
+                    if path.is_symlink() or not path.is_file():
+                        raise RuntimeError(f"unsafe legacy run record: {path.name}")
+                    record = self._read_path(path)
+                    if self._path(record.id) != path:
+                        raise RuntimeError(f"legacy run identity mismatch: {path.name}")
+                    self._put(connection, record)
+                    digest.update(path.name.encode() + b"\0" + path.read_bytes())
+                    count += 1
+                receipt = {"source_format": "json", "source_records": count,
+                           "source_sha256": digest.hexdigest(), "migrated_at": format_timestamp(self._now()),
+                           "legacy_files_preserved": True}
+                connection.execute("INSERT INTO metadata VALUES ('migration',?)", (json.dumps(receipt, sort_keys=True),))
+                connection.execute("PRAGMA user_version=1")
+                connection.commit()
+                connection.close()
+                connection = None
+                with temporary.open("rb") as handle:
+                    os.fsync(handle.fileno())
+                os.replace(temporary, self.database_path)
+                directory_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                if connection is not None:
+                    connection.close()
+                temporary.unlink(missing_ok=True)
+                Path(str(temporary) + "-journal").unlink(missing_ok=True)
+
+    def _atomic_write(self, record: RunRecord) -> None:
+        self._require_writable()
+        self._path(record.id)
+        with self._database() as connection:
+            self._put(connection, record)
+
+    def export_json(self, destination: str | Path) -> dict[str, object]:
+        """Export a consistent rollback snapshot to a new directory; never overwrite state."""
+        destination = Path(destination)
+        destination.mkdir(mode=0o700, parents=False, exist_ok=False)
+        count = 0
+        try:
+            if self._legacy_read_only:
+                payloads = [self._serialize(self._read_path(path)) for path in sorted(self.root.glob("run-*.json"))]
+            else:
+                with self._database() as connection:
+                    payloads = [row[0] for row in connection.execute("SELECT payload FROM runs ORDER BY id")]
+            digest = hashlib.sha256()
+            for payload in payloads:
+                record = RunRecord.model_validate_json(payload)
+                self._path(record.id)
+                path = destination / f"{record.id}.json"
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                digest.update(path.name.encode() + b"\0" + payload.encode())
+                count += 1
+            receipt = {"records": count, "sha256": digest.hexdigest(), "format": "json"}
+            (destination / "export-receipt.json").write_text(json.dumps(receipt, sort_keys=True) + "\n")
+            return receipt
+        except BaseException:
+            # Partial export is never published as a completed rollback snapshot.
+            for path in destination.iterdir():
+                path.unlink()
+            destination.rmdir()
+            raise
 
     def _read_path(self, path: Path) -> RunRecord:
         try:
@@ -336,53 +457,55 @@ class RunStore:
             idempotent=idempotent,
             started_at=format_timestamp(now),
         )
-        self._atomic_write(record)
+        with self._write_lock():
+            self._atomic_write(record)
         return record
 
     def get(self, run_id: str) -> RunRecord:
         path = self._path(run_id)
-        if not path.is_file():
+        if self._legacy_read_only:
+            if not path.is_file():
+                raise ValueError(f"unknown run: {run_id}")
+            return self._read_path(path)
+        with self._database() as connection:
+            row = connection.execute("SELECT payload FROM runs WHERE id=?", (run_id,)).fetchone()
+        if row is None:
             raise ValueError(f"unknown run: {run_id}")
-        return self._read_path(path)
+        return RunRecord.model_validate_json(row[0])
 
-    def list(
-        self,
-        *,
-        status: RunStatus | None = None,
-        task_id: str | None = None,
-        limit: int = 100,
-    ) -> list[RunRecord]:
+    def list(self, *, status: RunStatus | None = None, task_id: str | None = None,
+             limit: int = 100) -> list[RunRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("run list limit must be between 1 and 500")
-        paths = sorted(
-            (path for path in self.root.glob("run-*.json") if path.is_file()),
-            key=lambda path: path.name,
-            reverse=True,
-        )
-        records: list[RunRecord] = []
-        for path in paths:
-            record = self._read_path(path)
-            if status is not None and record.status != status:
-                continue
-            if task_id is not None and record.task_id != task_id:
-                continue
-            records.append(record)
-            if len(records) >= limit:
-                break
-        return records
+        if self._legacy_read_only:
+            records = (self._read_path(path) for path in sorted(self.root.glob("run-*.json"), reverse=True) if path.is_file())
+            result = []
+            for record in records:
+                if (status is None or record.status == status) and (task_id is None or record.task_id == task_id):
+                    result.append(record)
+                    if len(result) == limit:
+                        break
+            return result
+        clauses, values = [], []
+        for name, value in (("status", status), ("task_id", task_id)):
+            if value is not None:
+                clauses.append(name + "=?")
+                values.append(value)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._database() as connection:
+            rows = connection.execute("SELECT payload FROM runs" + where + " ORDER BY id DESC LIMIT ?", (*values, limit)).fetchall()
+        return [RunRecord.model_validate_json(row[0]) for row in rows]
 
     def count(self) -> int:
-        return sum(1 for path in self.root.glob("run-*.json") if path.is_file())
+        if self._legacy_read_only:
+            return sum(1 for path in self.root.glob("run-*.json") if path.is_file())
+        with self._database() as connection:
+            return connection.execute("SELECT count(*) FROM runs").fetchone()[0]
 
     def recent(self, *, limit: int = 20) -> list[RunRecord]:
         if limit < 1 or limit > 100:
             raise ValueError("recent run limit must be between 1 and 100")
-        paths = sorted(
-            (path for path in self.root.glob("run-*.json") if path.is_file()),
-            key=lambda path: path.name,
-            reverse=True,
-        )
-        return [self._read_path(path) for path in paths[:limit]]
+        return self.list(limit=limit)
 
     def finish(self, run_id: str, execution: dict[str, Any]) -> RunRecord:
         with self._write_lock():
@@ -464,14 +587,12 @@ class RunStore:
 
     def reconcile_incomplete(self) -> int:
         self._require_writable()
+        with self._database() as connection:
+            rows = connection.execute("SELECT id,execution_mode FROM runs WHERE status='running' ORDER BY id").fetchall()
         reconciled = 0
-        for path in sorted(self.root.glob("run-*.json")):
-            if not path.is_file():
-                continue
-            record = self._read_path(path)
-            if record.status == "running" and record.execution_mode in self.reconcile_modes:
-                error_type = "ExecutorRestart" if record.execution_mode == "async" else "ServerRestart"
-                self.interrupt(record.id, error_type=error_type)
+        for run_id, mode in rows:
+            if mode in self.reconcile_modes:
+                self.interrupt(run_id, error_type="ExecutorRestart" if mode == "async" else "ServerRestart")
                 reconciled += 1
         return reconciled
 
@@ -479,21 +600,12 @@ class RunStore:
         self._require_writable()
         if self.completed_days is None:
             return []
-        cutoff = self._now() - timedelta(days=self.completed_days)
-        removed: list[str] = []
-        for path in sorted(self.root.glob("run-*.json")):
-            if not path.is_file():
-                continue
-            with self._write_lock():
-                if not path.is_file():
-                    continue
-                record = self._read_path(path)
-                if record.status not in _TERMINAL_CLEANUP_STATUSES:
-                    continue
-                if record.ambiguous or record.retained or record.ended_at is None:
-                    continue
-                if parse_timestamp(record.ended_at) > cutoff:
-                    continue
-                path.unlink()
-                removed.append(record.id)
-        return removed
+        cutoff = (self._now() - timedelta(days=self.completed_days)).timestamp()
+        statuses = sorted(_TERMINAL_CLEANUP_STATUSES)
+        with self._write_lock(), self._database() as connection:
+            rows = connection.execute(
+                "SELECT id FROM runs WHERE retained=0 AND ambiguous=0 AND ended_at<=? AND status IN ("
+                + ",".join("?" for _ in statuses) + ") ORDER BY id", (cutoff, *statuses),
+            ).fetchall()
+            connection.executemany("DELETE FROM runs WHERE id=?", rows)
+        return [row[0] for row in rows]

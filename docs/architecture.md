@@ -56,7 +56,7 @@ A Reach process restart is a different boundary. Raw command/script content is i
 
 ## State boundary
 
-Runs, Tasks and Candidates remain filesystem-backed. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
+Runs use peer-local SQLite; Tasks and Candidates retain their existing filesystem stores. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
 
 The Web UI and HTTP API use explicit read-only stores. They do not reconcile Runs, repair Tasks or execute remote work.
 
@@ -65,3 +65,7 @@ The Web UI and HTTP API use explicit read-only stores. They do not reconcile Run
 The repository owns generic product code, schemas, examples, tests and documentation. Deployment-specific configuration, SSH credentials, target inventory and private tools remain outside the product repository.
 
 This boundary is intentionally broader than MCP. MCP is one interface to Reach; it is not the product identity.
+
+## Run storage
+
+Run persistence is peer-local SQLite with transactional legacy JSON migration and explicit offline rollback export. See [Run storage](run-storage.md) for boundaries, ownership and recovery. Tasks and Candidates keep their existing stores.

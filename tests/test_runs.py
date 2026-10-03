@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -37,7 +39,7 @@ def test_run_record_excludes_execution_content(tmp_path) -> None:
         may_mutate=True,
     )
     finished = store.finish(record.id, _execution())
-    payload = (tmp_path / f"{record.id}.json").read_text(encoding="utf-8")
+    payload = run_payload(tmp_path, record.id)
 
     assert finished.status == "succeeded"
     assert finished.stdout_bytes == 30
@@ -72,7 +74,7 @@ def test_run_persists_bounded_result_ref_without_output_content(tmp_path) -> Non
         result_ref="reports/local-llm-wp1/result.json",
     )
     finished = store.finish(record.id, _execution())
-    payload = (tmp_path / f"{record.id}.json").read_text(encoding="utf-8")
+    payload = run_payload(tmp_path, record.id)
 
     assert finished.result_ref == "reports/local-llm-wp1/result.json"
     assert finished.summary()["result_ref"] == "reports/local-llm-wp1/result.json"
@@ -89,11 +91,10 @@ def test_historical_v3_run_without_result_ref_remains_readable(tmp_path) -> None
         may_mutate=False,
         result_ref="reports/example.json",
     )
-    path = tmp_path / f"{record.id}.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(run_payload(tmp_path, record.id))
     payload["schema_version"] = 3
     payload.pop("result_ref")
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    replace_run_payload(tmp_path, record.id, json.dumps(payload))
 
     restored = store.get(record.id)
     assert restored.schema_version == 3
@@ -125,10 +126,9 @@ def test_existing_run_without_idempotent_reads_as_unknown(tmp_path) -> None:
         timeout_seconds=30,
         may_mutate=True,
     )
-    path = tmp_path / f"{record.id}.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(run_payload(tmp_path, record.id))
     payload.pop("idempotent")
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    replace_run_payload(tmp_path, record.id, json.dumps(payload))
 
     assert store.get(record.id).idempotent is None
 
@@ -189,7 +189,7 @@ def test_read_only_store_does_not_reconcile_or_mutate(tmp_path) -> None:
         timeout_seconds=30,
         may_mutate=True,
     )
-    path = tmp_path / f"{record.id}.json"
+    path = tmp_path / "runs.sqlite3"
     before = path.read_bytes()
 
     read_only = RunStore(tmp_path, read_only=True)
@@ -395,14 +395,15 @@ def test_list_runs_stops_reading_after_unfiltered_limit(tmp_path, monkeypatch) -
         )
 
     read_count = 0
-    original = store._read_path
+    from hypershell_reach.runs import RunRecord
+    original = RunRecord.model_validate_json
 
     def counted(path):
         nonlocal read_count
         read_count += 1
         return original(path)
 
-    monkeypatch.setattr(store, "_read_path", counted)
+    monkeypatch.setattr(RunRecord, "model_validate_json", counted)
     records = store.list(limit=3)
 
     assert len(records) == 3
