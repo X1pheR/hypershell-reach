@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 import json
 from pathlib import Path
 
@@ -95,7 +97,7 @@ async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, mo
     assert captured["stdin_text"] == script_path.read_text(encoding="utf-8")
     assert captured["timeout_seconds"] == 15
     run = server._run_store_instance.get(result["run_id"])
-    raw = (tmp_path / "runs" / f"{run.id}.json").read_text(encoding="utf-8")
+    raw = run_payload(tmp_path / "runs", run.id)
     assert run.may_mutate is False
     assert run.idempotent is True
     assert run.purpose == "Validate managed script execution metadata."

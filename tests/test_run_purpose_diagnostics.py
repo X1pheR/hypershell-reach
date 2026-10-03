@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 import json
 
 import pytest
@@ -174,7 +176,7 @@ def test_historical_v1_run_remains_readable_and_is_not_silently_rewritten(tmp_pa
     assert path.read_bytes() == before
 
     retained = store.set_retained(run_id, True)
-    rewritten = json.loads(path.read_text(encoding="utf-8"))
+    rewritten = json.loads(run_payload(tmp_path, run_id))
     assert retained.schema_version == 1
     assert rewritten["schema_version"] == 1
     assert "purpose" not in rewritten
@@ -280,7 +282,7 @@ async def test_raw_execution_content_and_secret_sensitive_fields_remain_absent_f
     )
 
     persisted = "\n".join(
-        (tmp_path / "runs" / f"{run_id}.json").read_text(encoding="utf-8")
+        run_payload(tmp_path / "runs", run_id)
         for run_id in (command_result["run_id"], shell_result["run_id"])
     )
     assert command_secret not in persisted
@@ -315,6 +317,6 @@ def test_run_task_relation_remains_optional_and_reverse_derived_only_from_task_i
     assert unlinked.task_id is None
     assert linked.task_id == "task-example"
     assert [record.id for record in store.list(task_id="task-example")] == [linked.id]
-    raw = json.loads((tmp_path / f"{linked.id}.json").read_text(encoding="utf-8"))
+    raw = json.loads(run_payload(tmp_path, linked.id))
     assert "linked_run_ids" not in raw
     assert "runs" not in raw

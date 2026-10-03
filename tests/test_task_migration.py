@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 import shutil
 from pathlib import Path
 
@@ -167,7 +169,7 @@ def test_migration_preserves_run_task_relationship_without_task_backlinks(tmp_pa
         may_mutate=True,
         task_id=task.id,
     )
-    run_path = runs_root / f"{run.id}.json"
+    run_path = runs_root / "runs.sqlite3"
     before = run_path.read_bytes()
 
     target_active = tmp_path / "target-active"

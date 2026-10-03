@@ -88,6 +88,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         report = validate_configuration(args.config)
         print(report.text)
         raise SystemExit(0 if report.valid else 1)
+    if arguments and arguments[0] == "export-runs-json":
+        from .runs import RunStore
+        parser = argparse.ArgumentParser(prog="reach export-runs-json", description="Export peer-local Runs for offline rollback.")
+        parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
+        parser.add_argument("--output", required=True, help="New output directory; must not already exist.")
+        args = parser.parse_args(arguments[1:])
+        config = load_config(args.config)
+        print(json.dumps(RunStore(config.workspace.runs, read_only=True).export_json(args.output), sort_keys=True))
+        return
     if arguments and arguments[0] == "export-hermes-snapshot":
         args = _snapshot_export_parser().parse_args(arguments[1:])
         payload = asyncio.run(export_hermes_snapshot(load_config(args.config), args.source))

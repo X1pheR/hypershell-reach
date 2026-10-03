@@ -112,3 +112,7 @@ See [Architecture](docs/architecture.md), [MCPJungle](docs/mcpjungle.md) and [We
 ## Development and releases
 
 Use the repository's frozen test and browser-acceptance entrypoints. Releases provide a wheel, source distribution and checksums. See [Development](docs/development.md), [Release lifecycle](docs/releasing.md), [Contributing](CONTRIBUTING.md) and [License](LICENSE).
+
+### Upgrading to 0.10
+
+Run persistence now uses peer-local SQLite with automatic transactional import of legacy JSON. Stop the old peer for migration and retain its state preimage. Public Run IDs and APIs are unchanged; Tasks and Candidates do not migrate. Downgrade requires exporting current Runs with `reach export-runs-json`, including post-upgrade records, before restarting the old version. See [Run storage and rollback](docs/run-storage.md).

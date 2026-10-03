@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 import json
 
 import pytest
@@ -61,7 +63,7 @@ async def test_run_command_persists_metadata_without_command(tmp_path, monkeypat
     )
     result = json.loads(content[0].text)
     record = server._run_store_instance.get(result["run_id"])
-    raw = (tmp_path / "runs" / f"{record.id}.json").read_text(encoding="utf-8")
+    raw = run_payload(tmp_path / "runs", record.id)
 
     assert result["execution"]["status"] == "succeeded"
     assert record.operation == "run_command"

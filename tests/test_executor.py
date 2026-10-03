@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from run_storage_helpers import run_payload, replace_run_payload
+
 import asyncio
 
 import pytest
@@ -82,7 +84,7 @@ async def test_submission_connection_can_close_before_job_finishes(tmp_path, mon
         assert finished.status == "succeeded"
         assert finished.exit_code == 0
         assert finished.execution_mode == "async"
-        assert "SECRET-WORKER-OUTPUT" not in (tmp_path / "runs" / f"{run_id}.json").read_text()
+        assert "SECRET-WORKER-OUTPUT" not in run_payload(tmp_path / "runs", run_id)
     finally:
         await service.stop()
 

@@ -3,7 +3,7 @@ FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffb
 
 COPY --from=uv /usr/local/bin/uv /usr/local/bin/uv
 
-ARG REACH_VERSION=0.9.0
+ARG REACH_VERSION=0.10.0
 ARG REACH_REVISION=unknown
 ARG REACH_CREATED=unknown
 LABEL org.opencontainers.image.title="Hypershell Reach" \
