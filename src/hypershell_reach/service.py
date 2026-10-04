@@ -83,6 +83,37 @@ def _validate_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] in {"migrate-persistence", "export-persistence"}:
+        from .persistence_migration import migrate_persistence, export_legacy
+        command = arguments[0]
+        parser = argparse.ArgumentParser(prog=f"reach {command}", description="Offline peer-local state migration/rollback; quiesce all source writers first.")
+        parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
+        parser.add_argument("--database", help="Explicit unified DB path; defaults to workspace.database.")
+        if command == "migrate-persistence":
+            parser.add_argument("--fresh", action="store_true", help="Explicitly initialize empty state instead of importing legacy stores.")
+        else:
+            parser.add_argument("--output", required=True, help="New rollback directory; must not exist.")
+        args = parser.parse_args(arguments[1:])
+        config = load_config(args.config)
+        database = args.database or config.workspace.database
+        if not database:
+            parser.error("--database or workspace.database is required")
+        if command == "export-persistence":
+            receipt = export_legacy(database, args.output)
+        elif args.fresh:
+            import tempfile
+            from pathlib import Path
+            with tempfile.TemporaryDirectory() as temporary:
+                candidates = Path(temporary) / "candidates" if config.workspace.candidates else None
+                if candidates is not None:
+                    candidates.mkdir()
+                receipt = migrate_persistence(database, candidates_root=candidates)
+        else:
+            receipt = migrate_persistence(database, runs_root=config.workspace.runs,
+                tasks_root=config.workspace.tasks, archive_root=config.workspace.trash,
+                candidates_root=config.workspace.candidates)
+        print(json.dumps(receipt, sort_keys=True))
+        return
     if arguments and arguments[0] == "validate":
         args = _validate_parser().parse_args(arguments[1:])
         report = validate_configuration(args.config)
@@ -95,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.add_argument("--output", required=True, help="New output directory; must not already exist.")
         args = parser.parse_args(arguments[1:])
         config = load_config(args.config)
-        print(json.dumps(RunStore(config.workspace.runs, read_only=True).export_json(args.output), sort_keys=True))
+        print(json.dumps(RunStore(config.workspace.runs, read_only=True, database=config.workspace.database).export_json(args.output), sort_keys=True))
         return
     if arguments and arguments[0] == "export-hermes-snapshot":
         args = _snapshot_export_parser().parse_args(arguments[1:])

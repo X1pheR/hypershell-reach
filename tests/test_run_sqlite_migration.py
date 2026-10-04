@@ -104,7 +104,7 @@ def test_cli_rollback_export_uses_configured_peer_store(tmp_path,monkeypatch,cap
     from hypershell_reach import service
     root=tmp_path/'source';store=RunStore(root,reconcile_modes=set())
     record=store.create(operation='run_command',target='example',timeout_seconds=30,may_mutate=False)
-    monkeypatch.setattr(service,'load_config',lambda _:SimpleNamespace(workspace=SimpleNamespace(runs=root)))
+    monkeypatch.setattr(service,'load_config',lambda _:SimpleNamespace(workspace=SimpleNamespace(runs=root, database=None)))
     output=tmp_path/'export';service.main(['export-runs-json','--output',str(output)])
     assert json.loads(capsys.readouterr().out)['records']==1
     assert (output/(record.id+'.json')).exists()

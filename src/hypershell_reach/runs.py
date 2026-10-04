@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+
+from .database import ReachDatabase, database_for, timestamp
 import fcntl
 import json
 import os
@@ -235,6 +237,7 @@ class RunStore:
         now: Callable[[], datetime] = utc_now,
         read_only: bool = False,
         reconcile_modes: set[RunExecutionMode] | None = None,
+        database: ReachDatabase | str | Path | None = None,
     ) -> None:
         self.root = Path(root)
         self.completed_days = completed_days
@@ -242,9 +245,14 @@ class RunStore:
         self.read_only = read_only
         self.reconcile_modes = reconcile_modes if reconcile_modes is not None else {"sync", "async"}
         self.write_lock_path = self.root / ".write.lock"
-        self.database_path = self.root / "runs.sqlite3"
+        self._unified = database_for(database, read_only=read_only) if database is not None else None
+        self.database_path = self._unified.path if self._unified is not None else self.root / "runs.sqlite3"
         self._database_seen = self.database_path.exists()
-        if not self.read_only:
+        if self._unified is not None:
+            self._unified.validate()
+            if not self.read_only:
+                self.reconcile_incomplete()
+        elif not self.read_only:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
             self._initialize_database()
             self.reconcile_incomplete()
@@ -253,6 +261,8 @@ class RunStore:
     def _legacy_read_only(self) -> bool:
         # Read models may be constructed before service lifespan migrates Runs.
         # Once observed, a missing database is an error, never stale JSON fallback.
+        if self._unified is not None:
+            return False
         self._database_seen = self._database_seen or self.database_path.exists()
         return self.read_only and not self._database_seen
 
@@ -268,6 +278,10 @@ class RunStore:
     @contextmanager
     def _write_lock(self):
         self._require_writable()
+        if self._unified is not None:
+            with self._unified.connection(write=True):
+                yield
+            return
         fd = os.open(self.write_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -290,7 +304,11 @@ class RunStore:
         return json.dumps(serialized, indent=2, sort_keys=True) + "\n"
 
     @contextmanager
-    def _database(self):
+    def _database(self, *, write: bool = False):
+        if self._unified is not None:
+            with self._unified.connection(write=write) as connection:
+                yield connection
+            return
         if self.database_path.is_symlink():
             raise RuntimeError("run database must not be a symlink")
         # mode=rw never silently recreates a lost/corrupt accepted database.
@@ -307,7 +325,21 @@ class RunStore:
             connection.close()
 
     @staticmethod
-    def _put(connection, record: RunRecord) -> None:
+    def _put(connection, record: RunRecord, *, unified: bool = False) -> None:
+        if unified:
+            connection.execute(
+                "INSERT INTO runs(id,status,task_id,execution_mode,retained,ambiguous,ended_at,"
+                "target,operation,execution_class,started_at,payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET status=excluded.status,task_id=excluded.task_id,"
+                "execution_mode=excluded.execution_mode,retained=excluded.retained,ambiguous=excluded.ambiguous,"
+                "ended_at=excluded.ended_at,target=excluded.target,operation=excluded.operation,"
+                "execution_class=excluded.execution_class,started_at=excluded.started_at,payload=excluded.payload",
+                (record.id, record.status, record.task_id, record.execution_mode, int(record.retained),
+                 int(record.ambiguous), timestamp(record.ended_at) if record.ended_at else None,
+                 record.target, record.operation, record.execution_class, timestamp(record.started_at),
+                 RunStore._serialize(record)),
+            )
+            return
         connection.execute(
             "INSERT INTO runs(id,status,task_id,execution_mode,retained,ambiguous,ended_at,payload) "
             "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
@@ -376,8 +408,8 @@ class RunStore:
     def _atomic_write(self, record: RunRecord) -> None:
         self._require_writable()
         self._path(record.id)
-        with self._database() as connection:
-            self._put(connection, record)
+        with self._database(write=True) as connection:
+            self._put(connection, record, unified=self._unified is not None)
 
     def export_json(self, destination: str | Path) -> dict[str, object]:
         """Export a consistent rollback snapshot to a new directory; never overwrite state."""
@@ -473,34 +505,93 @@ class RunStore:
             raise ValueError(f"unknown run: {run_id}")
         return RunRecord.model_validate_json(row[0])
 
+    def _query_parts(self, filters: dict[str, Any]) -> tuple[str, list[object]]:
+        clauses: list[str] = []
+        values: list[object] = []
+        typed = {"status", "task_id", "execution_mode", "retained", "ambiguous", "ended_at"}
+        all_fields = typed | {"target", "operation", "execution_class", "started_at"}
+        for name, value in filters.items():
+            if value is None:
+                continue
+            if name == "q":
+                if not isinstance(value, str) or len(value) > 512:
+                    raise ValueError("run query text must be at most 512 characters")
+                fields = ("id", "target", "operation", "purpose", "result_summary", "result_ref", "script_id")
+                expressions = ["id" if field == "id" else "json_extract(payload,'$." + field + "')" for field in fields]
+                clauses.append("(" + " OR ".join("instr(lower(coalesce(" + expr + ",'')),lower(?))>0" for expr in expressions) + ")")
+                values.extend([value] * len(expressions))
+                continue
+            time_field = next((field for field in ("started_at", "ended_at") if name.startswith(field[:-3] + "_")), None)
+            if time_field is not None:
+                suffix = name.rsplit("_", 1)[-1]
+                if suffix not in {"after", "before"}:
+                    raise ValueError("unsupported run query filter")
+                expression = time_field if self._unified is not None or time_field in typed else "(julianday(json_extract(payload,'$.started_at'))-2440587.5)*86400.0"
+                clauses.append(expression + (">=?" if suffix == "after" else "<=?"))
+                values.append(timestamp(value))
+            elif name in all_fields:
+                expression = name if self._unified is not None or name in typed else "json_extract(payload,'$." + name + "')"
+                clauses.append(expression + "=?")
+                values.append(int(value) if name in {"retained", "ambiguous"} else value)
+            else:
+                raise ValueError("unsupported run query filter")
+        return (" WHERE " + " AND ".join(clauses) if clauses else "", values)
+
+    def _legacy_records(self, filters: dict[str, Any]) -> list[RunRecord]:
+        records = [self._read_path(path) for path in self.root.glob("run-*.json") if path.is_file()]
+        for name, value in filters.items():
+            if value is None:
+                continue
+            if name == "q":
+                records = [record for record in records if any(value.lower() in str(record.summary().get(field) or "").lower() for field in ("id", "target", "operation", "purpose", "result_summary", "result_ref", "script_id"))]
+            elif name in {"started_after", "started_before", "ended_after", "ended_before"}:
+                field, suffix = name.split("_")
+                cutoff = timestamp(value)
+                records = [record for record in records if getattr(record, field + "_at") is not None and (timestamp(getattr(record, field + "_at")) >= cutoff if suffix == "after" else timestamp(getattr(record, field + "_at")) <= cutoff)]
+            else:
+                records = [record for record in records if getattr(record, name) == value]
+        return records
+
     def list(self, *, status: RunStatus | None = None, task_id: str | None = None,
-             limit: int = 100) -> list[RunRecord]:
+             target: str | None = None, operation: str | None = None,
+             execution_mode: str | None = None, execution_class: str | None = None,
+             retained: bool | None = None, ambiguous: bool | None = None,
+             started_after: str | None = None, started_before: str | None = None,
+             ended_after: str | None = None, ended_before: str | None = None,
+             q: str | None = None, limit: int = 100, offset: int = 0,
+             sort: str = "id", descending: bool = True) -> list[RunRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("run list limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("run list offset must be non-negative")
+        sorts = {"id", "started_at", "ended_at", "status", "target", "operation", "execution_mode", "execution_class"}
+        if sort not in sorts:
+            raise ValueError("unsupported run sort")
+        filters = {"status": status, "task_id": task_id, "target": target, "operation": operation,
+                   "execution_mode": execution_mode, "execution_class": execution_class,
+                   "retained": retained, "ambiguous": ambiguous, "started_after": started_after,
+                   "started_before": started_before, "ended_after": ended_after,
+                   "ended_before": ended_before, "q": q}
+        where, values = self._query_parts(filters)
         if self._legacy_read_only:
-            records = (self._read_path(path) for path in sorted(self.root.glob("run-*.json"), reverse=True) if path.is_file())
-            result = []
-            for record in records:
-                if (status is None or record.status == status) and (task_id is None or record.task_id == task_id):
-                    result.append(record)
-                    if len(result) == limit:
-                        break
-            return result
-        clauses, values = [], []
-        for name, value in (("status", status), ("task_id", task_id)):
-            if value is not None:
-                clauses.append(name + "=?")
-                values.append(value)
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+            records = self._legacy_records(filters)
+            records.sort(key=lambda record: (getattr(record, sort) or "", record.id), reverse=descending)
+            return records[offset:offset + limit]
+        expression = sort if self._unified is not None or sort in {"id", "status", "execution_mode", "ended_at"} else "json_extract(payload,'$." + sort + "')"
+        direction = " DESC" if descending else " ASC"
         with self._database() as connection:
-            rows = connection.execute("SELECT payload FROM runs" + where + " ORDER BY id DESC LIMIT ?", (*values, limit)).fetchall()
+            rows = connection.execute("SELECT payload FROM runs" + where + " ORDER BY " + expression + direction + ",id" + direction + " LIMIT ? OFFSET ?", (*values, limit, offset)).fetchall()
         return [RunRecord.model_validate_json(row[0]) for row in rows]
 
-    def count(self) -> int:
+    def query(self, *, sort: str = "started_at", **kwargs: Any) -> list[RunRecord]:
+        return self.list(sort=sort, **kwargs)
+
+    def count(self, **filters: Any) -> int:
+        where, values = self._query_parts(filters)
         if self._legacy_read_only:
-            return sum(1 for path in self.root.glob("run-*.json") if path.is_file())
+            return len(self._legacy_records(filters))
         with self._database() as connection:
-            return connection.execute("SELECT count(*) FROM runs").fetchone()[0]
+            return connection.execute("SELECT count(*) FROM runs" + where, values).fetchone()[0]
 
     def recent(self, *, limit: int = 20) -> list[RunRecord]:
         if limit < 1 or limit > 100:
@@ -602,7 +693,7 @@ class RunStore:
             return []
         cutoff = (self._now() - timedelta(days=self.completed_days)).timestamp()
         statuses = sorted(_TERMINAL_CLEANUP_STATUSES)
-        with self._write_lock(), self._database() as connection:
+        with self._write_lock(), self._database(write=True) as connection:
             rows = connection.execute(
                 "SELECT id FROM runs WHERE retained=0 AND ambiguous=0 AND ended_at<=? AND status IN ("
                 + ",".join("?" for _ in statuses) + ") ORDER BY id", (cutoff, *statuses),

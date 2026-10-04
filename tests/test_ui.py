@@ -308,22 +308,16 @@ def test_overview_uses_lightweight_summaries_instead_of_full_detail_loaders(tmp_
 
 def test_growing_views_use_server_rendered_discovery_controls_and_filtered_empty_state(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path)
-    run_rows = [
-        {
-            "id": f"run-{index:03d}",
-            "status": "failed" if index == 0 else "succeeded",
-            "operation": "run_command" if index % 2 == 0 else "run_script",
-            "target": "docker",
-            "started_at": f"2026-08-20T12:{index:02d}:00Z",
-            "ended_at": f"2026-08-20T12:{index:02d}:01Z",
-            "task_id": None,
-            "script_id": "system.inspect" if index % 2 else None,
-            "ambiguous": False,
-            "retained": False,
-        }
-        for index in range(30)
-    ]
-    monkeypatch.setattr("hypershell_reach.read_model.ReachReadModel.run_summaries", lambda self, limit=100: run_rows)
+    store = RunStore(config.workspace.runs)
+    run_ids = []
+    for index in range(30):
+        run = store.create(operation="run_command", target="docker", timeout_seconds=30, may_mutate=False)
+        run_ids.append(run.id)
+        store.finish(run.id, {
+            "status": "remote_error" if index == 0 else "succeeded", "exit_code": 1 if index == 0 else 0,
+            "timed_out": False, "duration_ms": 2,
+            "stdout": {"bytes": 0, "truncated": False}, "stderr": {"bytes": 0, "truncated": False},
+        })
     client = TestClient(create_app(config))
 
     first = client.get("/runs")
@@ -339,10 +333,10 @@ def test_growing_views_use_server_rendered_discovery_controls_and_filtered_empty
     assert "30 results · showing 26–30" in second.text
     assert "Page 2 of 2" in second.text
 
-    filtered = client.get("/runs?q=run-000&filter=failed")
+    filtered = client.get(f"/runs?q={run_ids[0]}&filter=remote_error")
     assert "1 result · showing 1–1" in filtered.text
-    assert "run-000" in filtered.text
-    assert "run-001" not in filtered.text
+    assert run_ids[0] in filtered.text
+    assert run_ids[1] not in filtered.text
 
     missing = client.get("/runs?q=does-not-exist")
     assert "No entries match the current filters." in missing.text
@@ -628,7 +622,9 @@ def test_read_only_api_exposes_bounded_product_inventory(tmp_path) -> None:
     assert summary.json() == {
         "product": "Hypershell Reach",
         "status": "ok",
-        "counts": {"skills": 1, "tools": 1, "tasks": 1, "runs": 1},
+        "counts": {"skills": 1, "tools": 1, "tasks": 1, "runs": 1, "archived_tasks": 0,
+                   "active_tasks": 1, "blocked_tasks": 0, "running_runs": 0,
+                   "ambiguous_runs": 0, "error_runs": 0},
     }
 
     skills = client.get("/api/v1/skills").json()

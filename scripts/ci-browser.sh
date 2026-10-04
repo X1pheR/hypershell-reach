@@ -7,6 +7,7 @@ RUN_ID="${BROWSER_RUN_ID:-$(date +%s)-$$}"
 BROWSER_RESULTS_DIR="${RESULTS_ROOT}/browser/${RUN_ID}"
 APP_LOG="${BROWSER_RESULTS_DIR}/reach.log"
 PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright/python:v1.62.0-noble"
+REACH_BROWSER_UNIFIED="${REACH_BROWSER_UNIFIED:-0}"
 BROWSER_LOCK_FILE="${BROWSER_LOCK_FILE:-${TMPDIR:-/tmp}/reach-ci-browser.lock}"
 BROWSER_RUN_TIMEOUT_SECONDS="${BROWSER_RUN_TIMEOUT_SECONDS:-600}"
 BROWSER_TEST_TIMEOUT_SECONDS="${BROWSER_TEST_TIMEOUT_SECONDS:-300}"
@@ -194,6 +195,21 @@ targets:
       known_hosts_file: /run/secrets/unused_known_hosts
 YAML
 
+if [[ "${REACH_BROWSER_UNIFIED}" == "1" ]]; then
+  # The source fixture is frozen before the app starts. Upgrade its historical
+  # JSON Runs, then exercise the real product migration before serving the UI.
+  sed -i '/^workspace:$/a\  database: /fixture/reach.sqlite3' "${FIXTURE_ROOT}/config.yaml"
+  cat > "${FIXTURE_ROOT}/start-unified.sh" <<'SH'
+#!/bin/sh
+set -eu
+python -c 'from hypershell_reach.runs import RunStore; RunStore("/fixture/runs")'
+reach migrate-persistence --config /fixture/config.yaml --database /fixture/reach.sqlite3
+exec reach --config /fixture/config.yaml --host 0.0.0.0 --port 8080
+SH
+  # Only this disposable fixture root needs database/sidecar creation rights.
+  chmod a+rwx "${FIXTURE_ROOT}"
+fi
+
 # Fixture files come from the runner UID, while Reach runs as UID 1000.
 # Make read-only fixture content portable and only the ephemeral state roots writable.
 chmod -R a+rX "${FIXTURE_ROOT}"
@@ -236,12 +252,17 @@ image_created=1
 docker network create "${NETWORK}" >/dev/null
 network_created=1
 
+app_command=(reach --config /fixture/config.yaml --host 0.0.0.0 --port 8080)
+if [[ "${REACH_BROWSER_UNIFIED}" == "1" ]]; then
+  app_command=(sh /fixture/start-unified.sh)
+fi
+
 docker create \
   --name "${APP_CONTAINER}" \
   --network "${NETWORK}" \
   -e REACH_CONFIG=/fixture/config.yaml \
   "${APP_IMAGE}" \
-  reach --config /fixture/config.yaml --host 0.0.0.0 --port 8080 >/dev/null
+  "${app_command[@]}" >/dev/null
 app_created=1
 
 docker cp "${FIXTURE_ROOT}/." "${APP_CONTAINER}:/fixture"

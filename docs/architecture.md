@@ -23,7 +23,7 @@ flowchart LR
     end
 
     X --> SSH[Configured SSH targets]
-    RM --> W[(Filesystem-backed state and sources)]
+    RM --> W[(Peer-local state and sources)]
     X --> W
 ```
 
@@ -56,7 +56,7 @@ A Reach process restart is a different boundary. Raw command/script content is i
 
 ## State boundary
 
-Runs use peer-local SQLite; Tasks and Candidates retain their existing filesystem stores. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
+With `workspace.database`, Runs, Tasks, Task leases and configured Candidates use one transactional peer-local SQLite database. Legacy configuration remains compatible; explicit offline migration switches the complete state authority. Candidate authority stays explicitly configured, never inferred from table existence. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
 
 The Web UI and HTTP API use explicit read-only stores. They do not reconcile Runs, repair Tasks or execute remote work.
 
@@ -68,4 +68,4 @@ This boundary is intentionally broader than MCP. MCP is one interface to Reach; 
 
 ## Run storage
 
-Run persistence is peer-local SQLite with transactional legacy JSON migration and explicit offline rollback export. See [Run storage](run-storage.md) for boundaries, ownership and recovery. Tasks and Candidates keep their existing stores.
+Unified persistence adapts the existing Run SQLite store. See [Unified persistence](unified-persistence.md) for transaction, schema, migration and current-state rollback contracts; [Run storage](run-storage.md) retains the v0.10 compatibility path.

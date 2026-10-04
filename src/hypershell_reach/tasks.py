@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import re
 import shutil
@@ -12,6 +13,8 @@ from uuid import uuid4
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from .database import ReachDatabase, database_for, timestamp
 
 TaskStatus = Literal["active", "partial", "blocked", "completed", "cancelled"]
 EvidenceClass = Literal["observed", "configured", "documented", "planned", "unknown"]
@@ -137,14 +140,20 @@ class TaskStore:
         archived_days: int | None = None,
         now: Callable[[], datetime] = utc_now,
         read_only: bool = False,
+        database: ReachDatabase | str | Path | None = None,
     ) -> None:
+        # In unified mode these paths identify legacy layout only; all state access
+        # is dispatched to the database and no directory is created or written.
         self.tasks_root = Path(tasks_root)
         self.trash_root = Path(trash_root)
         self.lock_root = self.tasks_root / ".locks"
         self.archived_days = archived_days
         self._now = now
         self.read_only = read_only
-        if not self.read_only:
+        self.database = database_for(database, read_only=read_only) if database is not None else None
+        if self.database is not None:
+            self.database.validate()
+        if not self.read_only and self.database is None:
             self.tasks_root.mkdir(parents=True, exist_ok=True, mode=0o750)
             self.trash_root.mkdir(parents=True, exist_ok=True, mode=0o750)
             self.lock_root.mkdir(exist_ok=True, mode=0o750)
@@ -168,14 +177,38 @@ class TaskStore:
         return directory / "execution-lease.yaml"
 
     def _validate_directory_entry(self, directory: Path) -> None:
+        if self.database is not None:
+            return
         if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
             raise RuntimeError(f"invalid task directory: {directory.name}")
 
     def _iter_task_directories(self, root: Path) -> Iterator[Path]:
+        if self.database is not None:
+            with self.database.connection() as conn:
+                rows = conn.execute("SELECT id FROM tasks WHERE archived=? ORDER BY id",
+                                    (int(root == self.trash_root),)).fetchall()
+            for row in rows:
+                yield root / row["id"]
+            return
         for directory in sorted(root.glob("task-*")):
             self._validate_directory_entry(directory)
-            if directory.is_dir():
+            if self._directory_exists(directory):
                 yield directory
+
+    def _directory_exists(self, directory: Path) -> bool:
+        if self.database is None:
+            return directory.is_dir()
+        with self.database.connection() as conn:
+            return conn.execute("SELECT 1 FROM tasks WHERE id=? AND archived=?",
+                                (directory.name, int(directory.parent == self.trash_root))).fetchone() is not None
+
+    def _remove_execution_lease(self, directory: Path) -> None:
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                conn.execute("DELETE FROM task_leases WHERE task_id=?", (directory.name,))
+        else:
+            self._lease_path(directory).unlink(missing_ok=True)
+            self._fsync_directory(directory)
 
     def _require_writable(self) -> None:
         if self.read_only:
@@ -185,6 +218,10 @@ class TaskStore:
     def _lock(self, task_id: str) -> Iterator[None]:
         self._require_writable()
         self._validate_task_id(task_id)
+        if self.database is not None:
+            with self.database.connection(write=True):
+                yield
+            return
         path = self.lock_root / f"{task_id}.lock"
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -197,6 +234,10 @@ class TaskStore:
     @contextmanager
     def _create_lock(self) -> Iterator[None]:
         self._require_writable()
+        if self.database is not None:
+            with self.database.connection(write=True):
+                yield
+            return
         path = self.lock_root / "create.lock"
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -226,6 +267,20 @@ class TaskStore:
         project_ref: str | None,
     ) -> TaskRecord | None:
         identity = self._continuity_identity(title, objective, project_ref)
+        if self.database is not None:
+            with self.database.connection() as conn:
+                row = conn.execute(
+                    "SELECT id,payload FROM tasks WHERE identity=? AND archived=0 AND status IN ('active','partial','blocked') ORDER BY id LIMIT 1",
+                    (json.dumps(identity),),
+                ).fetchone()
+            if row is None:
+                return None
+            record = self._decode(row["payload"])
+            if (record.id != row["id"] or record.status not in _OPEN_STATUSES
+                    or record.archived_at is not None
+                    or self._continuity_identity(record.title, record.objective, record.project_ref) != identity):
+                raise RuntimeError("task identity does not match database index")
+            return record
         for directory in self._iter_task_directories(self.tasks_root):
             record = self._read_dir(directory)
             if record.status not in _OPEN_STATUSES:
@@ -235,6 +290,8 @@ class TaskStore:
         return None
 
     def _fsync_directory(self, directory: Path) -> None:
+        if self.database is not None:
+            return
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         fd = os.open(directory, flags)
         try:
@@ -242,8 +299,46 @@ class TaskStore:
         finally:
             os.close(fd)
 
+    @staticmethod
+    def _decode(payload: str) -> TaskRecord:
+        try:
+            record = TaskRecord.model_validate_json(payload)
+            if not _TASK_ID.fullmatch(record.id):
+                raise ValueError("invalid task ID")
+            timestamp(record.created_at)
+            timestamp(record.updated_at)
+            if record.archived_at is not None:
+                timestamp(record.archived_at)
+            return record
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("invalid task record in database") from exc
+
+    @staticmethod
+    def _put(conn, record: TaskRecord, *, archived: bool) -> None:
+        # Called only inside a write transaction. Full contract payload and typed
+        # read columns are committed together, never separate state authorities.
+        record = TaskStore._decode(record.model_dump_json())
+        conn.execute(
+            """INSERT INTO tasks (id,status,revision,archived,created_at,updated_at,
+               archived_at,project_ref,retained,blocked,identity,payload)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET status=excluded.status,revision=excluded.revision,
+               archived=excluded.archived,created_at=excluded.created_at,updated_at=excluded.updated_at,
+               archived_at=excluded.archived_at,project_ref=excluded.project_ref,retained=excluded.retained,
+               blocked=excluded.blocked,identity=excluded.identity,payload=excluded.payload""",
+            (record.id,record.status,record.revision,int(archived),timestamp(record.created_at),
+             timestamp(record.updated_at),timestamp(record.archived_at) if record.archived_at else None,
+             record.project_ref,int(record.retained),int(bool(record.continuity.blockers)),
+             json.dumps(TaskStore._continuity_identity(record.title,record.objective,record.project_ref)),
+             record.model_dump_json()),
+        )
+
     def _atomic_write(self, directory: Path, record: TaskRecord) -> None:
         self._require_writable()
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                self._put(conn, record, archived=directory.parent == self.trash_root)
+            return
         if directory.is_symlink():
             raise RuntimeError("task directory must not be a symlink")
         directory.mkdir(parents=True, exist_ok=True, mode=0o750)
@@ -275,6 +370,15 @@ class TaskStore:
         lease: TaskExecutionLease,
     ) -> None:
         self._require_writable()
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                conn.execute(
+                    """INSERT INTO task_leases(task_id,executor_id,expires_at,payload) VALUES(?,?,?,?)
+                       ON CONFLICT(task_id) DO UPDATE SET executor_id=excluded.executor_id,
+                       expires_at=excluded.expires_at,payload=excluded.payload""",
+                    (directory.name,lease.executor_id,timestamp(lease.expires_at),lease.model_dump_json()),
+                )
+            return
         path = self._lease_path(directory)
         temporary = directory / f".execution-lease.{uuid4().hex}.tmp"
         payload = yaml.safe_dump(
@@ -298,6 +402,18 @@ class TaskStore:
                 pass
 
     def _read_execution_lease(self, directory: Path) -> TaskExecutionLease | None:
+        if self.database is not None:
+            with self.database.connection() as conn:
+                row = conn.execute("SELECT payload FROM task_leases WHERE task_id=?", (directory.name,)).fetchone()
+            if row is None:
+                return None
+            try:
+                lease = TaskExecutionLease.model_validate_json(row["payload"])
+                for value in (lease.acquired_at, lease.refreshed_at, lease.expires_at):
+                    timestamp(value)
+                return lease
+            except (ValueError, TypeError) as exc:
+                raise RuntimeError(f"invalid task execution lease: {directory.name}") from exc
         path = self._lease_path(directory)
         if not path.exists():
             return None
@@ -315,8 +431,7 @@ class TaskStore:
             return None
         if parse_timestamp(lease.expires_at) > self._now():
             return lease
-        self._lease_path(directory).unlink(missing_ok=True)
-        self._fsync_directory(directory)
+        self._remove_execution_lease(directory)
         return None
 
     def _require_execution_lease(
@@ -355,9 +470,9 @@ class TaskStore:
             archived = self._archived_dir(task_id)
             self._validate_directory_entry(directory)
             self._validate_directory_entry(archived)
-            if archived.exists():
+            if self._directory_exists(archived):
                 raise ValueError(f"task is archived: {task_id}")
-            if not directory.is_dir():
+            if not self._directory_exists(directory):
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
             if record.status not in _OPEN_STATUSES:
@@ -451,7 +566,7 @@ class TaskStore:
                 }
             if current.lease_id != lease_id:
                 raise ValueError("task execution lease does not match")
-            self._lease_path(directory).unlink()
+            self._remove_execution_lease(directory)
             self._fsync_directory(directory)
             return {
                 "acquired": False,
@@ -472,9 +587,9 @@ class TaskStore:
             archived = self._archived_dir(task_id)
             self._validate_directory_entry(directory)
             self._validate_directory_entry(archived)
-            if archived.exists():
+            if self._directory_exists(archived):
                 raise ValueError(f"task is archived: {task_id}")
-            if not directory.is_dir():
+            if not self._directory_exists(directory):
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
             if record.status not in _OPEN_STATUSES:
@@ -482,7 +597,17 @@ class TaskStore:
             return self._require_execution_lease(directory, task_lease_id)
 
     def _read_dir(self, directory: Path) -> TaskRecord:
-        if directory.is_symlink() or not directory.is_dir():
+        if self.database is not None:
+            with self.database.connection() as conn:
+                row = conn.execute("SELECT payload FROM tasks WHERE id=? AND archived=?",
+                                   (directory.name,int(directory.parent == self.trash_root))).fetchone()
+            if row is None:
+                raise RuntimeError(f"invalid task record: {directory.name}")
+            record = self._decode(row["payload"])
+            if record.id != directory.name:
+                raise RuntimeError("task ID does not match database key")
+            return record
+        if directory.is_symlink() or not self._directory_exists(directory):
             raise RuntimeError(f"invalid task directory: {directory.name}")
         path = self._record_path(directory)
         if path.is_symlink() or not path.is_file():
@@ -532,41 +657,67 @@ class TaskStore:
             )
             with self._lock(record.id):
                 directory = self._current_dir(record.id)
-                if directory.exists() or self._archived_dir(record.id).exists():
+                if self._directory_exists(directory) or self._directory_exists(self._archived_dir(record.id)):
                     raise RuntimeError(f"task already exists: {record.id}")
-                directory.mkdir(mode=0o750)
+                if self.database is None:
+                    directory.mkdir(mode=0o750)
                 try:
                     self._atomic_write(directory, record)
                     self._fsync_directory(self.tasks_root)
                 except Exception:
-                    shutil.rmtree(directory, ignore_errors=True)
+                    if self.database is None:
+                        shutil.rmtree(directory, ignore_errors=True)
                     self._fsync_directory(self.tasks_root)
                     raise
             return record
 
     def get(self, task_id: str) -> TaskRecord:
+        if self.database is not None:
+            self._validate_task_id(task_id)
+            with self.database.connection() as conn:
+                row = conn.execute("SELECT payload FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown task: {task_id}")
+            record = self._decode(row["payload"])
+            if record.id != task_id:
+                raise RuntimeError("task ID does not match database key")
+            return record
         current = self._current_dir(task_id)
         archived = self._archived_dir(task_id)
         self._validate_directory_entry(current)
         self._validate_directory_entry(archived)
-        if current.exists() and archived.exists():
+        if self._directory_exists(current) and self._directory_exists(archived):
             raise RuntimeError(f"task exists in current and archive: {task_id}")
-        if current.is_dir():
+        if self._directory_exists(current):
             return self._read_dir(current)
-        if archived.is_dir():
+        if self._directory_exists(archived):
             return self._read_dir(archived)
         raise ValueError(f"unknown task: {task_id}")
 
     def require_open(self, task_id: str) -> TaskRecord:
+        if self.database is not None:
+            self._validate_task_id(task_id)
+            with self.database.connection() as conn:
+                row = conn.execute("SELECT archived,payload FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown task: {task_id}")
+            record = self._decode(row["payload"])
+            if record.id != task_id:
+                raise RuntimeError("task ID does not match database key")
+            if row["archived"]:
+                raise ValueError(f"task is archived: {task_id}")
+            if record.status not in _OPEN_STATUSES:
+                raise ValueError(f"task is terminal: {task_id}")
+            return record
         current = self._current_dir(task_id)
         archived = self._archived_dir(task_id)
         self._validate_directory_entry(current)
         self._validate_directory_entry(archived)
-        if current.exists() and archived.exists():
+        if self._directory_exists(current) and self._directory_exists(archived):
             raise RuntimeError(f"task exists in current and archive: {task_id}")
-        if archived.exists():
+        if self._directory_exists(archived):
             raise ValueError(f"task is archived: {task_id}")
-        if not current.is_dir():
+        if not self._directory_exists(current):
             raise ValueError(f"unknown task: {task_id}")
         record = self._read_dir(current)
         if record.status not in _OPEN_STATUSES:
@@ -582,6 +733,8 @@ class TaskStore:
     ) -> list[TaskRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("task list limit must be between 1 and 500")
+        if self.database is not None:
+            return self.query(status=status, archived=None if include_archived else False, limit=limit)
         active_records: list[TaskRecord] = []
         archived_records: list[TaskRecord] = []
         seen: set[str] = set()
@@ -712,11 +865,11 @@ class TaskStore:
             archived = self._archived_dir(task_id)
             self._validate_directory_entry(directory)
             self._validate_directory_entry(archived)
-            if directory.exists() and archived.exists():
+            if self._directory_exists(directory) and self._directory_exists(archived):
                 raise RuntimeError(f"task exists in current and archive: {task_id}")
-            if archived.exists():
+            if self._directory_exists(archived):
                 raise ValueError(f"task is archived: {task_id}")
-            if not directory.is_dir():
+            if not self._directory_exists(directory):
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
             self._require_execution_lease(directory, task_lease_id)
@@ -782,14 +935,14 @@ class TaskStore:
             archived = self._archived_dir(task_id)
             self._validate_directory_entry(directory)
             self._validate_directory_entry(archived)
-            if directory.exists() and archived.exists():
+            if self._directory_exists(directory) and self._directory_exists(archived):
                 raise RuntimeError(f"task exists in current and archive: {task_id}")
-            if archived.exists():
+            if self._directory_exists(archived):
                 archived_record = self._read_dir(archived)
                 if status is not None and status != archived_record.status:
                     raise ValueError("terminal task status cannot be changed")
                 raise ValueError(f"task is archived: {task_id}")
-            if not directory.is_dir():
+            if not self._directory_exists(directory):
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(directory)
             self._require_execution_lease(directory, task_lease_id)
@@ -854,7 +1007,11 @@ class TaskStore:
             return updated
 
     def _move_to_archive(self, current: Path, archived: Path) -> None:
-        if current.exists() and archived.exists():
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                conn.execute("UPDATE tasks SET archived=1 WHERE id=? AND archived=0", (current.name,))
+            return
+        if self._directory_exists(current) and self._directory_exists(archived):
             raise RuntimeError(f"task exists in current and archive: {current.name}")
         if self.tasks_root.stat().st_dev != self.trash_root.stat().st_dev:
             raise RuntimeError("task current and archive roots must be on the same filesystem")
@@ -890,10 +1047,12 @@ class TaskStore:
             archived = self._archived_dir(task_id)
             self._validate_directory_entry(current)
             self._validate_directory_entry(archived)
-            if current.exists() and archived.exists():
+            if self._directory_exists(current) and self._directory_exists(archived):
                 raise RuntimeError(f"task exists in current and archive: {task_id}")
-            if archived.is_dir():
+            if self._directory_exists(archived):
                 record = self._read_dir(archived)
+                if any(blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX) for blocker in record.continuity.blockers):
+                    raise ValueError("pending mutation requires explicit reconciliation before terminal task close")
                 if self._desired_close_matches(
                     record,
                     status=status,
@@ -906,7 +1065,7 @@ class TaskStore:
                     continuity=continuity,
                     retained=retained,
                 ):
-                    self._lease_path(archived).unlink(missing_ok=True)
+                    self._remove_execution_lease(archived)
                     self._fsync_directory(archived)
                     self._fsync_directory(self.tasks_root)
                     self._fsync_directory(self.trash_root)
@@ -914,10 +1073,12 @@ class TaskStore:
                 if record.status != status:
                     raise ValueError("terminal task status cannot be changed")
                 raise ValueError(f"task is already archived with different final state: {task_id}")
-            if not current.is_dir():
+            if not self._directory_exists(current):
                 raise ValueError(f"unknown task: {task_id}")
             record = self._read_dir(current)
             self._require_execution_lease(current, task_lease_id)
+            if any(blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX) for blocker in record.continuity.blockers):
+                raise ValueError("pending mutation requires explicit reconciliation before terminal task close")
             if record.status in _TERMINAL_STATUSES and record.status != status:
                 raise ValueError("terminal task status cannot be changed")
             if record.status in _TERMINAL_STATUSES and record.archived_at is not None:
@@ -935,7 +1096,7 @@ class TaskStore:
                 ):
                     raise ValueError(f"task has committed terminal state with different final data: {task_id}")
                 self._move_to_archive(current, archived)
-                self._lease_path(archived).unlink(missing_ok=True)
+                self._remove_execution_lease(archived)
                 self._fsync_directory(archived)
                 return self._read_dir(archived)
             if expected_revision is not None and record.revision != expected_revision:
@@ -961,13 +1122,15 @@ class TaskStore:
                 retained=retained,
                 archived_at=archived_at,
             )
+            if any(blocker.startswith(PENDING_MUTATION_BLOCKER_PREFIX) for blocker in updated.continuity.blockers):
+                raise ValueError("pending mutation requires explicit reconciliation before terminal task close")
             if status == "completed" and updated.next_action is not None:
                 raise ValueError("completed task cannot retain next_action")
             if status == "completed" and updated.continuity.blockers:
                 raise ValueError("completed task cannot retain blockers")
             self._atomic_write(current, updated)
             self._move_to_archive(current, archived)
-            self._lease_path(archived).unlink(missing_ok=True)
+            self._remove_execution_lease(archived)
             self._fsync_directory(archived)
             return self._read_dir(archived)
 
@@ -981,15 +1144,26 @@ class TaskStore:
     def repair(self) -> list[str]:
         self._require_writable()
         repaired: list[str] = []
+        if self.database is not None:
+            with self.database.connection() as conn:
+                rows = conn.execute("SELECT id,payload FROM tasks WHERE archived=0 ORDER BY id").fetchall()
+            for row in rows:
+                record = self._decode(row["payload"])
+                if record.id != row["id"]:
+                    raise RuntimeError("task ID does not match database key")
+                if record.status in _TERMINAL_STATUSES:
+                    self.close(record.id, status=record.status)
+                    repaired.append(record.id)
+            return repaired
         for directory in self._iter_task_directories(self.tasks_root):
             task_id = directory.name
             archived = self._archived_dir(task_id)
-            if archived.exists():
+            if self._directory_exists(archived):
                 raise RuntimeError(f"task exists in current and archive: {task_id}")
             try:
                 record = self._read_dir(directory)
             except RuntimeError:
-                if not directory.exists() and archived.is_dir():
+                if not self._directory_exists(directory) and self._directory_exists(archived):
                     continue
                 raise
             if record.status not in _TERMINAL_STATUSES:
@@ -1003,6 +1177,22 @@ class TaskStore:
         if self.archived_days is None:
             return []
         cutoff = self._now() - timedelta(days=self.archived_days)
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                rows = conn.execute(
+                    "SELECT id,status,retained,archived_at,payload FROM tasks WHERE archived=1 AND status IN ('completed','cancelled') AND retained=0 AND archived_at<=? ORDER BY id",
+                    (cutoff.timestamp(),),
+                ).fetchall()
+                for row in rows:
+                    record = self._decode(row["payload"])
+                    if (record.id != row["id"] or record.status != row["status"]
+                            or int(record.retained) != row["retained"]
+                            or record.archived_at is None
+                            or timestamp(record.archived_at) != row["archived_at"]):
+                        raise RuntimeError("task cleanup index disagrees with payload")
+                ids = [row["id"] for row in rows]
+                conn.executemany("DELETE FROM tasks WHERE id=?", ((task_id,) for task_id in ids))
+            return ids
         removed: list[str] = []
         for directory in self._iter_task_directories(self.trash_root):
             record = self._read_dir(directory)
@@ -1017,3 +1207,95 @@ class TaskStore:
         if removed:
             self._fsync_directory(self.trash_root)
         return removed
+
+    @staticmethod
+    def _query_filter(*, status=None, archived=False, project_ref=None, retained=None, blocked=None, q=None):
+        where, args = [], []
+        for column, value in (("status", status), ("archived", archived), ("project_ref", project_ref),
+                              ("retained", retained), ("blocked", blocked)):
+            if value is not None:
+                where.append(f"{column}=?")
+                args.append(int(value) if isinstance(value, bool) else value)
+        if q:
+            term = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            fields = ("id", "status", "project_ref", "json_extract(payload,'$.title')",
+                      "json_extract(payload,'$.next_action')")
+            where.append("(" + " OR ".join(f"{f} LIKE ? ESCAPE '\\'" for f in fields) + ")")
+            args.extend([term] * len(fields))
+        return (" WHERE " + " AND ".join(where) if where else ""), args
+
+    def query(self, *, status=None, archived=False, project_ref=None, retained=None, blocked=None,
+              q=None, sort="updated_at", descending=True, limit=100, offset=0) -> list[TaskRecord]:
+        if not 1 <= limit <= 500 or offset < 0:
+            raise ValueError("task query limit must be between 1 and 500 and offset nonnegative")
+        columns = {"updated_at":"updated_at","created_at":"created_at","archived_at":"archived_at",
+                   "id":"id","status":"status","project_ref":"project_ref",
+                   "title":"json_extract(payload,'$.title')","next_action":"json_extract(payload,'$.next_action')"}
+        if sort not in columns:
+            raise ValueError("invalid task query sort")
+        if self.database is None:
+            entries = [(self._read_dir(d), root == self.trash_root)
+                       for root in (self.tasks_root,self.trash_root)
+                       for d in self._iter_task_directories(root)]
+            if len({r.id for r, _ in entries}) != len(entries):
+                raise RuntimeError("duplicate task ID in legacy store")
+            records = [r for r, physical_archive in entries if (status is None or r.status == status)
+                       and (archived is None or physical_archive == archived)
+                       and (project_ref is None or r.project_ref == project_ref)
+                       and (retained is None or r.retained == retained)
+                       and (blocked is None or bool(r.continuity.blockers) == blocked)
+                       and (not q or q.casefold() in " ".join(str(x or "") for x in
+                            (r.id,r.title,r.status,r.project_ref,r.next_action)).casefold())]
+            records.sort(key=lambda r:(getattr(r,sort) or "",r.id),reverse=descending)
+            return records[offset:offset+limit]
+        where,args = self._query_filter(status=status,archived=archived,project_ref=project_ref,
+                                        retained=retained,blocked=blocked,q=q)
+        direction = "DESC" if descending else "ASC"
+        with self.database.connection() as conn:
+            rows = conn.execute(f"SELECT id,payload FROM tasks{where} ORDER BY {columns[sort]} {direction},id {direction} LIMIT ? OFFSET ?",
+                                (*args,limit,offset)).fetchall()
+        records = [self._decode(row["payload"]) for row in rows]
+        if any(r.id != row["id"] for r,row in zip(records,rows)):
+            raise RuntimeError("task ID does not match database key")
+        return records
+
+    def query_summaries(self, **filters) -> list[dict[str, object]]:
+        """Project physical archive state without changing historical payloads.
+
+        The bounded batch shares a read snapshot with the page query; it does
+        not issue one lookup per Task or invent missing archive timestamps.
+        """
+        if self.database is None:
+            return [{**record.summary(), "archived": self._archived_dir(record.id).is_dir()}
+                    for record in self.query(**filters)]
+        with self.database.connection() as conn:
+            records = self.query(**filters)
+            if not records:
+                return []
+            placeholders = ",".join("?" for _ in records)
+            archived = dict(conn.execute(f"SELECT id,archived FROM tasks WHERE id IN ({placeholders})",
+                                         [record.id for record in records]))
+            return [{**record.summary(), "archived": bool(archived[record.id])} for record in records]
+
+    def count(self, *, status=None, archived=False, project_ref=None, retained=None, blocked=None, q=None) -> int:
+        if self.database is None:
+            offset = 0
+            while True:
+                rows = self.query(status=status,archived=archived,project_ref=project_ref,
+                                  retained=retained,blocked=blocked,q=q,limit=500,offset=offset)
+                offset += len(rows)
+                if len(rows) < 500:
+                    return offset
+        where,args = self._query_filter(status=status,archived=archived,project_ref=project_ref,
+                                        retained=retained,blocked=blocked,q=q)
+        with self.database.connection() as conn:
+            return conn.execute(f"SELECT count(*) FROM tasks{where}",args).fetchone()[0]
+
+    def lease_summary(self, task_id: str) -> dict[str, object] | None:
+        """Safe presentation metadata; never expose the mutation-authorizing lease ID."""
+        record = self.get(task_id)
+        directory = self._archived_dir(task_id) if record.archived_at else self._current_dir(task_id)
+        lease = self._read_execution_lease(directory)
+        if lease is None or parse_timestamp(lease.expires_at) <= self._now():
+            return None
+        return {"executor_id":lease.executor_id,"expires_at":lease.expires_at}
