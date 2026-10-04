@@ -428,6 +428,7 @@ def _run_store() -> RunStore:
     if _run_store_instance is None:
         _run_store_instance = RunStore(
             _config.workspace.runs,
+            database=_config.workspace.database,
             completed_days=_config.retention.runs.completed_days,
             reconcile_modes={"sync"},
         )
@@ -441,6 +442,7 @@ def _task_store() -> TaskStore:
         _task_store_instance = TaskStore(
             _config.workspace.tasks,
             _config.workspace.trash,
+            database=_config.workspace.database,
             archived_days=_config.retention.tasks.archived_days,
         )
         _task_store_instance.repair()
@@ -506,7 +508,7 @@ def _candidate_store() -> CandidateStore:
     if path is None:
         raise ValueError("candidate store is not configured")
     if _candidate_store_instance is None or _candidate_store_instance.root != __import__("pathlib").Path(path):
-        _candidate_store_instance = CandidateStore(path)
+        _candidate_store_instance = CandidateStore(path, database=_config.workspace.database)
     return _candidate_store_instance
 
 
@@ -1776,6 +1778,7 @@ def initialize_runtime(config: ReachConfig, *, executor_service: ExecutorService
     _skill_registry_cache_source_snapshot = None
     _run_store_instance = RunStore(
         _config.workspace.runs,
+        database=_config.workspace.database,
         completed_days=_config.retention.runs.completed_days,
         reconcile_modes={"sync"},
     )
@@ -1783,12 +1786,13 @@ def initialize_runtime(config: ReachConfig, *, executor_service: ExecutorService
     _task_store_instance = TaskStore(
         _config.workspace.tasks,
         _config.workspace.trash,
+        database=_config.workspace.database,
         archived_days=_config.retention.tasks.archived_days,
     )
     _task_store_instance.repair()
     _task_store_instance.cleanup()
     _candidate_store_instance = (
-        CandidateStore(_config.workspace.candidates)
+        CandidateStore(_config.workspace.candidates, database=_config.workspace.database)
         if _config.workspace.candidates is not None
         else None
     )

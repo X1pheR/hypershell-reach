@@ -35,7 +35,7 @@ The service listens on one HTTP port:
 
 - `/mcp` — Streamable HTTP MCP endpoint;
 - `/api/v1/summary` — compact product counts for dashboards such as Homepage;
-- `/api/v1/skills`, `/api/v1/tools`, `/api/v1/tasks`, `/api/v1/runs` — bounded read-only inventory;
+- `/api/v1/skills`, `/api/v1/tools`, `/api/v1/tasks`, `/api/v1/runs`, `/api/v1/candidates` — bounded read-only inventory;
 - `/` and product views — read-only Web UI;
 - `/healthz` — health endpoint.
 
@@ -116,3 +116,5 @@ Use the repository's frozen test and browser-acceptance entrypoints. Releases pr
 ### Upgrading to 0.10
 
 Run persistence now uses peer-local SQLite with automatic transactional import of legacy JSON. Stop the old peer for migration and retain its state preimage. Public Run IDs and APIs are unchanged; Tasks and Candidates do not migrate. Downgrade requires exporting current Runs with `reach export-runs-json`, including post-upgrade records, before restarting the old version. See [Run storage and rollback](docs/run-storage.md).
+
+Unified operational persistence is opt-in through `workspace.database`. Read [the migration and rollback contract](docs/unified-persistence.md) before upgrading an existing peer.

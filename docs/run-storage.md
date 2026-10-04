@@ -1,5 +1,7 @@
 # Peer-local Run persistence
 
+For the unified v0.11 path covering Runs, Tasks, leases and Candidates, see [Unified persistence](unified-persistence.md). This page describes the compatible v0.10 Run-only storage path used when `workspace.database` is omitted.
+
 Runs use SQLite in `workspace.runs/runs.sqlite3`. Tasks and Candidates retain their existing storage. Run IDs, record schema versions, MCP/HTTP contracts, retention rules and executor ownership remain unchanged. Each peer owns its own local database; network filesystems, shared active-active databases and concurrent old/new writers are unsupported.
 
 ## Design decision

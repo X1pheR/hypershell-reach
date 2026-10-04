@@ -13,6 +13,8 @@ import yaml
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .database import ReachDatabase, database_for, timestamp
+
 CandidateState = Literal[
     "candidate",
     "approved",
@@ -188,11 +190,22 @@ _ALLOWED_TRANSITIONS: dict[CandidateState, set[CandidateState]] = {
 
 
 class CandidateStore:
-    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
+    def __init__(self, root: str | Path | None, *, read_only: bool = False,
+                 database: ReachDatabase | str | Path | None = None) -> None:
+        # Configuration grants authority. A shared schema/table never does.
+        if root is None:
+            raise ValueError("candidate storage is not configured")
         self.root = Path(root)
         self.lock_root = self.root / ".locks"
         self.read_only = read_only
-        if not read_only:
+        self.database = database_for(database, read_only=read_only) if database is not None else None
+        if self.database is not None:
+            self.database.validate()
+            with self.database.connection() as conn:
+                authority = conn.execute("SELECT value FROM metadata WHERE key='candidate_authority'").fetchone()
+            if authority is None or authority["value"] != "true":
+                raise ValueError("candidate storage is not configured as writable authority in this database")
+        if not read_only and self.database is None:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
             self.lock_root.mkdir(exist_ok=True, mode=0o750)
 
@@ -212,6 +225,10 @@ class CandidateStore:
     def _lock(self, candidate_id: str) -> Iterator[None]:
         self._require_writable()
         self._validate_id(candidate_id)
+        if self.database is not None:
+            with self.database.connection(write=True):
+                yield
+            return
         path = self.lock_root / f"{candidate_id}.lock"
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -221,7 +238,32 @@ class CandidateStore:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    @staticmethod
+    def _decode(payload: str) -> CandidateRecord:
+        try:
+            record = CandidateRecord.model_validate_json(payload)
+            timestamp(record.created_at)
+            timestamp(record.updated_at)
+            return record
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("invalid candidate record in database") from exc
+
+    def _exists(self, path: Path) -> bool:
+        if self.database is not None:
+            with self.database.connection() as conn:
+                return conn.execute("SELECT 1 FROM candidates WHERE id=?", (path.stem,)).fetchone() is not None
+        return path.exists()
+
     def _read_path(self, path: Path) -> CandidateRecord:
+        if self.database is not None:
+            with self.database.connection() as conn:
+                row = conn.execute("SELECT payload FROM candidates WHERE id=?", (path.stem,)).fetchone()
+            if row is None:
+                raise RuntimeError(f"invalid candidate record: {path.name}")
+            record = self._decode(row["payload"])
+            if record.id != path.stem:
+                raise RuntimeError("candidate ID does not match database key")
+            return record
         if path.is_symlink() or not path.is_file():
             raise RuntimeError(f"invalid candidate record: {path.name}")
         try:
@@ -232,6 +274,9 @@ class CandidateStore:
         return record
 
     def _assert_no_duplicate_id(self, candidate_id: str, *, except_path: Path | None = None) -> None:
+        if self.database is not None:
+            # PRIMARY KEY prevents conflicting IDs; create checks inside its transaction.
+            return
         for path in self.root.glob("*.yaml"):
             if except_path is not None and path == except_path:
                 continue
@@ -240,6 +285,8 @@ class CandidateStore:
                 raise RuntimeError(f"duplicate candidate ID: {candidate_id}")
 
     def _fsync_directory(self) -> None:
+        if self.database is not None:
+            return
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         fd = os.open(self.root, flags)
         try:
@@ -247,8 +294,26 @@ class CandidateStore:
         finally:
             os.close(fd)
 
+    @staticmethod
+    def _put(conn, record: CandidateRecord) -> None:
+        record = CandidateStore._decode(record.model_dump_json())
+        conn.execute(
+            """INSERT INTO candidates(id,status,revision,recurrence_count,owner_id,created_at,updated_at,payload)
+               VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+               status=excluded.status,revision=excluded.revision,recurrence_count=excluded.recurrence_count,
+               owner_id=excluded.owner_id,created_at=excluded.created_at,updated_at=excluded.updated_at,
+               payload=excluded.payload""",
+            (record.id,record.promotion.state,record.revision,record.problem.recurrence_count,
+             record.ownership.owner_id,timestamp(record.created_at),timestamp(record.updated_at),
+             record.model_dump_json()),
+        )
+
     def _atomic_write(self, record: CandidateRecord) -> None:
         self._require_writable()
+        if self.database is not None:
+            with self.database.connection(write=True) as conn:
+                self._put(conn,record)
+            return
         path = self._path(record.id)
         temporary = self.root / f".{record.id}.{uuid4().hex}.tmp"
         payload = yaml.safe_dump(
@@ -303,7 +368,7 @@ class CandidateStore:
             raise RuntimeError("unable to allocate unique candidate ID after 32 attempts")
         with self._lock(candidate_id):
             path = self._path(candidate_id)
-            if path.exists():
+            if self._exists(path):
                 raise ValueError(f"candidate already exists: {candidate_id}")
             self._assert_no_duplicate_id(candidate_id)
             now = _utc_timestamp()
@@ -323,7 +388,7 @@ class CandidateStore:
 
     def get(self, candidate_id: str) -> CandidateRecord:
         path = self._path(candidate_id)
-        if not path.exists():
+        if not self._exists(path):
             raise ValueError(f"unknown candidate: {candidate_id}")
         record = self._read_path(path)
         if record.id != candidate_id:
@@ -333,6 +398,8 @@ class CandidateStore:
     def list(self, *, state: CandidateState | None = None, limit: int = 100) -> list[CandidateRecord]:
         if limit < 1 or limit > 500:
             raise ValueError("candidate list limit must be between 1 and 500")
+        if self.database is not None:
+            return self.query(state=state,limit=limit)
         records: list[CandidateRecord] = []
         seen: set[str] = set()
         for path in sorted(self.root.glob("*.yaml")):
@@ -495,3 +562,65 @@ class CandidateStore:
             self._atomic_write(updated)
             return updated
 
+
+    @staticmethod
+    def _query_filter(*, state=None, owner_id=None, q=None):
+        where,args = [],[]
+        for column,value in (("status",state),("owner_id",owner_id)):
+            if value is not None:
+                where.append(f"{column}=?")
+                args.append(value)
+        if q:
+            term = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            fields = ("id","status","owner_id","json_extract(payload,'$.title')", "json_extract(payload,'$.promotion.rationale')")
+            where.append("(" + " OR ".join(f"{f} LIKE ? ESCAPE '\\'" for f in fields) + ")")
+            args.extend([term]*len(fields))
+        return (" WHERE " + " AND ".join(where) if where else ""),args
+
+    def query(self, *, state=None, owner_id=None, q=None, sort="updated_at", descending=True,
+              limit=100, offset=0) -> list[CandidateRecord]:
+        if not 1 <= limit <= 500 or offset < 0:
+            raise ValueError("candidate query limit must be between 1 and 500 and offset nonnegative")
+        columns = {"id":"id","status":"status","state":"status","owner_id":"owner_id",
+                   "recurrence_count":"recurrence_count","created_at":"created_at","updated_at":"updated_at",
+                   "title":"json_extract(payload,'$.title')"}
+        if sort not in columns:
+            raise ValueError("invalid candidate query sort")
+        if self.database is None:
+            entries = [(p,self._read_path(p)) for p in sorted(self.root.glob("*.yaml"))]
+            records = [r for _,r in entries]
+            if len({r.id for r in records}) != len(records):
+                raise RuntimeError("duplicate candidate ID in legacy store")
+            if any(p.stem != r.id for p,r in entries):
+                raise RuntimeError("candidate ID does not match filename")
+            records = [r for r in records if (state is None or r.promotion.state == state)
+                       and (owner_id is None or r.ownership.owner_id == owner_id)
+                       and (not q or q.casefold() in " ".join((r.id,r.title,r.promotion.state,r.ownership.owner_id,r.promotion.rationale)).casefold())]
+            def key(r):
+                value = (r.promotion.state if sort in {"state","status"} else
+                         r.problem.recurrence_count if sort == "recurrence_count" else
+                         r.ownership.owner_id if sort == "owner_id" else getattr(r,sort))
+                return value,r.id
+            records.sort(key=key,reverse=descending)
+            return records[offset:offset+limit]
+        where,args = self._query_filter(state=state,owner_id=owner_id,q=q)
+        direction = "DESC" if descending else "ASC"
+        with self.database.connection() as conn:
+            rows = conn.execute(f"SELECT id,payload FROM candidates{where} ORDER BY {columns[sort]} {direction},id {direction} LIMIT ? OFFSET ?",
+                                (*args,limit,offset)).fetchall()
+        records = [self._decode(row["payload"]) for row in rows]
+        if any(r.id != row["id"] for r,row in zip(records,rows)):
+            raise RuntimeError("candidate ID does not match database key")
+        return records
+
+    def count(self, *, state=None, owner_id=None, q=None) -> int:
+        if self.database is None:
+            offset = 0
+            while True:
+                rows = self.query(state=state,owner_id=owner_id,q=q,limit=500,offset=offset)
+                offset += len(rows)
+                if len(rows)<500:
+                    return offset
+        where,args = self._query_filter(state=state,owner_id=owner_id,q=q)
+        with self.database.connection() as conn:
+            return conn.execute(f"SELECT count(*) FROM candidates{where}",args).fetchone()[0]

@@ -1,5 +1,7 @@
 # Runs and tasks
 
+Configured unified persistence stores these contracts transactionally in one peer-local SQLite database; see [Unified persistence](unified-persistence.md). Legacy configurations retain their existing representations. Task cancellation, like completion, cannot bypass unresolved server-owned pending-mutation state.
+
 Runs and tasks solve different problems.
 
 ## Runs

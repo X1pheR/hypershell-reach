@@ -20,10 +20,10 @@ T = TypeVar("T")
 class ReachReadModel:
     def __init__(self, config: ReachConfig) -> None:
         self.config = config
-        self.runs = RunStore(config.workspace.runs, read_only=True)
-        self.tasks = TaskStore(config.workspace.tasks, config.workspace.trash, read_only=True)
+        self.runs = RunStore(config.workspace.runs, database=config.workspace.database, read_only=True)
+        self.tasks = TaskStore(config.workspace.tasks, config.workspace.trash, database=config.workspace.database, read_only=True)
         self.candidate_store = (
-            CandidateStore(config.workspace.candidates, read_only=True)
+            CandidateStore(config.workspace.candidates, database=config.workspace.database, read_only=True)
             if config.workspace.candidates is not None
             else None
         )
@@ -65,30 +65,43 @@ class ReachReadModel:
     def tool(self, tool_id: str) -> dict[str, Any]:
         return load_tool_registry(self.config.sources.tools).get(tool_id).detail()
 
-    def run_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        return [record.summary() for record in self.runs.list(limit=limit)]
+    def run_summaries(self, *, limit: int = 100, **filters: Any) -> list[dict[str, Any]]:
+        return [record.summary() for record in self.runs.list(limit=limit, **filters)]
 
     def recent_run_summaries(self, *, limit: int = 20) -> list[dict[str, Any]]:
         return [record.summary() for record in self.runs.recent(limit=limit)]
 
-    def run_count(self) -> int:
-        return self._cached("run-count", 5.0, self.runs.count)
+    def run_count(self, **filters: Any) -> int:
+        return self.runs.count(**filters)
 
     def run(self, run_id: str) -> dict[str, Any]:
         return self.runs.get(run_id).model_dump()
 
-    def task_summaries(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        return self._cached(
-            f"tasks:{limit}",
-            5.0,
-            lambda: [record.summary() for record in self.tasks.list(limit=limit)],
-        )
+    def task_summaries(self, *, limit: int = 100, **filters: Any) -> list[dict[str, Any]]:
+        return self.tasks.query_summaries(limit=limit, **filters)
+
+    def task_count(self, **filters: Any) -> int:
+        return self.tasks.count(**filters)
+
+    def operational_counts(self) -> dict[str, int]:
+        return {
+            "tasks": self.task_count(),
+            "archived_tasks": self.task_count(archived=True),
+            "active_tasks": sum(self.task_count(status=status) for status in ("active", "partial", "blocked")),
+            "blocked_tasks": self.task_count(blocked=True) + self.task_count(status="blocked")
+                - self.task_count(status="blocked", blocked=True),
+            "runs": self.run_count(),
+            "running_runs": self.run_count(status="running"),
+            "ambiguous_runs": self.run_count(ambiguous=True),
+            "error_runs": sum(self.run_count(status=status) for status in (
+                "remote_error", "transport_error", "timeout", "local_error", "interrupted", "unknown")),
+        }
 
     def task(self, task_id: str) -> dict[str, Any]:
         return self.tasks.get(task_id).model_dump()
 
-    def related_run_summaries(self, task_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
-        return [record.summary() for record in self.runs.list(task_id=task_id, limit=limit)]
+    def related_run_summaries(self, task_id: str, *, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+        return [record.summary() for record in self.runs.list(task_id=task_id, limit=limit, offset=offset)]
 
     def skill_source_summaries(self) -> list[dict[str, Any]]:
         def load() -> list[dict[str, Any]]:
@@ -139,7 +152,7 @@ class ReachReadModel:
 
         return self._cached("skills", 60.0, load)
 
-    def candidates(self) -> tuple[bool, list[dict[str, Any]]]:
+    def candidates(self, *, limit: int = 100, **filters: Any) -> tuple[bool, list[dict[str, Any]]]:
         if self.candidate_store is not None:
             return True, [
                 {
@@ -150,7 +163,7 @@ class ReachReadModel:
                     "promotion_reason": candidate.promotion.rationale,
                     "structured": True,
                 }
-                for candidate in self.candidate_store.list()
+                for candidate in self.candidate_store.query(limit=limit, **filters)
             ]
         source = self.config.sources.tooling_registry
         if source is None or not source.enabled:
@@ -159,6 +172,12 @@ class ReachReadModel:
             {**candidate.summary(), "structured": False}
             for candidate in ToolingRegistry(source.path).candidates()
         ]
+
+    def candidate_count(self, **filters: Any) -> int:
+        if self.candidate_store is not None:
+            return self.candidate_store.count(**filters)
+        # Legacy registry is content-only, never a writable Candidate authority.
+        return len(self.candidates()[1])
 
     def candidate(self, candidate_id: str) -> dict[str, Any]:
         if self.candidate_store is None:

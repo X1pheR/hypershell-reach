@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from html import escape
-from typing import Any
+from typing import Any, get_args
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -13,6 +13,9 @@ from starlette.routing import Route
 
 from .config import ReachConfig, load_config
 from .read_model import ReachReadModel
+from .runs import RunStatus, RunOperation, RunExecutionMode, RunExecutionClass
+from .tasks import TaskStatus
+from .candidates import CandidateState
 from .ui_assets import CSS, REACH_MARK_SVG, JAVASCRIPT
 from .ui_docs import USER_GUIDE, DocumentationPage, TocItem, documentation_groups, render_document, technical_page
 
@@ -206,6 +209,8 @@ def _table(
     default_sort: str | None = None,
     default_desc: bool = False,
     page_size=25,
+    server_total: int | None = None,
+    filter_options: Sequence[str] | None = None,
 ) -> str:
     source_rows = list(rows)
     if request is None or not (search_fields or sort_fields or filter_field):
@@ -233,25 +238,25 @@ def _table(
         page = 1
 
     filtered = source_rows
-    if query:
+    if query and server_total is None:
         needle = query.casefold()
         filtered = [
             row for row in filtered
             if any(needle in _search_value(row.get(field)).casefold() for field in search_fields)
         ]
-    if filter_field and selected_filter:
+    if filter_field and selected_filter and server_total is None:
         filtered = [row for row in filtered if _search_value(row.get(filter_field)) == selected_filter]
-    if sort_key:
+    if sort_key and server_total is None:
         filtered.sort(
             key=lambda row: (_search_value(row.get(sort_key)).casefold(), _search_value(row.get("id")).casefold()),
             reverse=descending,
         )
 
-    total = len(filtered)
+    total = len(filtered) if server_total is None else server_total
     max_page = max(1, (total + page_size - 1) // page_size)
     page = min(page, max_page)
     start = (page - 1) * page_size
-    visible = filtered[start:start + page_size]
+    visible = filtered[start:start + page_size] if server_total is None else filtered
 
     controls: list[str] = ['<form class="table-controls" method="get">']
     if search_fields:
@@ -260,7 +265,7 @@ def _table(
             f'value="{escape(query)}" placeholder="Search visible fields"></label>'
         )
     if filter_field:
-        options = sorted({_search_value(row.get(filter_field)) for row in source_rows if _search_value(row.get(filter_field))})
+        options = list(filter_options) if filter_options is not None else sorted({_search_value(row.get(filter_field)) for row in source_rows if _search_value(row.get(filter_field))})
         option_html = ['<option value="">All</option>']
         for value in options:
             selected = ' selected' if value == selected_filter else ''
@@ -306,7 +311,7 @@ def _table(
             f'<tbody>{body}</tbody></table></div>'
         )
     else:
-        empty = "No entries." if not source_rows else "No entries match the current filters."
+        empty = "No entries match the current filters." if query or selected_filter else "No entries."
         table = f'<div class="empty">{empty}</div>'
 
     context = f'{total} result' if total == 1 else f'{total} results'
@@ -326,6 +331,59 @@ def _table(
         f'{"".join(controls)}<div class="data-region"><p class="result-context" role="status">{escape(context)}</p>'
         f'{table}{pagination}</div>'
     )
+
+
+def _query_options(request: Request, kind: str, *, html: bool = False, prefix: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate a bounded server query; only approved names reach SQL builders."""
+    params = request.query_params
+    name = lambda key: f"{prefix}_{key}" if prefix else key
+    default_limit = 25 if html else (500 if kind == "tasks" else 100)
+    limit = int(params.get(name("limit"), str(default_limit)))
+    offset = int(params.get(name("offset"), "0"))
+    if html:
+        limit = 25
+        offset = (max(1, int(params.get(name("page"), "1"))) - 1) * limit
+    if not 1 <= limit <= 500 or not 0 <= offset <= 10_000_000:
+        raise ValueError("invalid pagination")
+    allowed_sorts = {
+        "runs": ("id", "started_at", "ended_at", "status", "target", "operation", "execution_mode", "execution_class"),
+        "tasks": ("id", "title", "status", "updated_at", "created_at", "archived_at", "project_ref"),
+        "candidates": ("id", "title", "status", "updated_at", "created_at", "recurrence_count"),
+    }
+    default_sort = "started_at" if kind == "runs" else "updated_at"
+    sort = params.get(name("sort"), default_sort)
+    direction = params.get(name("dir"), "desc")
+    if sort not in allowed_sorts[kind] or direction not in ("asc", "desc"):
+        raise ValueError("invalid sort")
+    filters: dict[str, Any] = {}
+    status = params.get(name("filter") if html else "status")
+    if status:
+        valid = get_args({"runs": RunStatus, "tasks": TaskStatus, "candidates": CandidateState}[kind])
+        if status not in valid:
+            raise ValueError("invalid status")
+        filters["state" if kind == "candidates" else "status"] = status
+    strings = {"runs": ("task_id", "target", "operation", "execution_mode", "execution_class", "started_after", "started_before", "ended_after", "ended_before"), "tasks": ("project_ref",), "candidates": ("owner_id",)}[kind]
+    for key in (*strings, "q"):
+        value = params.get(name(key))
+        if value:
+            if len(value) > 512 or not value.isprintable():
+                raise ValueError("invalid filter")
+            filters[key] = value
+    if kind == "runs":
+        for key, contract in (("operation", RunOperation), ("execution_mode", RunExecutionMode), ("execution_class", RunExecutionClass)):
+            if key in filters and filters[key] not in get_args(contract):
+                raise ValueError("invalid execution filter")
+    booleans = {"runs": ("retained", "ambiguous"), "tasks": ("retained", "blocked", "archived"), "candidates": ()}[kind]
+    for key in booleans:
+        value = params.get(name(key))
+        if value is not None:
+            if key == "archived" and value == "all":
+                filters[key] = None
+            elif value in ("true", "false"):
+                filters[key] = value == "true"
+            else:
+                raise ValueError("invalid boolean filter")
+    return filters, {"limit": limit, "offset": offset, "sort": sort, "descending": direction == "desc"}
 
 
 def _safe_table(
@@ -506,9 +564,8 @@ def create_app(config: ReachConfig) -> Starlette:
             )
 
         try:
-            task_rows = model.task_summaries()
-            active_tasks = sum(1 for row in task_rows if str(row.get("status") or "").lower() != "completed")
-            completed_tasks = len(task_rows) - active_tasks
+            active_tasks = sum(model.task_count(status=status) for status in ("active", "partial", "blocked"))
+            completed_tasks = model.task_count(status="completed")
             tasks_card = _overview_card(
                 "Tasks",
                 "/tasks",
@@ -583,7 +640,14 @@ def create_app(config: ReachConfig) -> Starlette:
 
     def _candidates_content(request: Request) -> str:
         try:
-            configured, rows = model.candidates()
+            total = None
+            if model.candidate_store is not None:
+                filters, paging = _query_options(request, "candidates", html=True, prefix="candidates")
+                total = model.candidate_count(**filters)
+                paging["offset"] = min(paging["offset"], max(0, (total - 1) // 25) * 25)
+                configured, rows = model.candidates(**filters, **paging)
+            else:
+                configured, rows = model.candidates()
         except (OSError, RuntimeError, ValueError):
             return '<div class="notice error" role="alert">Tooling candidates are temporarily unavailable.</div>'
         notice = "" if configured else '<div class="notice">No tooling registry is configured.</div>'
@@ -607,10 +671,13 @@ def create_app(config: ReachConfig) -> Starlette:
             request=request,
             prefix="candidates",
             search_fields=("title", "status", "promotion_reason", "id"),
-            sort_fields=("title", "status", "id"),
+            sort_fields=("title", "status", "id", "updated_at", "recurrence_count"),
             filter_field="status",
             filter_label="Status",
-            default_sort="id",
+            default_sort="updated_at",
+            default_desc=True,
+            server_total=total,
+            filter_options=get_args(CandidateState) if total is not None else None,
         )
 
     def tooling(request: Request) -> Response:
@@ -655,8 +722,14 @@ def create_app(config: ReachConfig) -> Starlette:
         return _page("Tooling", "See reusable tools and gaps being considered for automation.", content, active="/tooling")
 
     def runs(request: Request) -> Response:
+        try:
+            filters, paging = _query_options(request, "runs", html=True)
+            total = model.run_count(**filters)
+            paging["offset"] = min(paging["offset"], max(0, (total - 1) // 25) * 25)
+        except ValueError:
+            return _error_page("Invalid query", "Invalid query parameters.", status_code=400)
         def run_rows() -> list[dict[str, Any]]:
-            rows = model.run_summaries()
+            rows = model.run_summaries(**filters, **paging)
             for row in rows:
                 run_id = str(row["id"])
                 row["id"] = _Link(f"/runs/{run_id}", run_id)
@@ -686,6 +759,8 @@ def create_app(config: ReachConfig) -> Starlette:
             filter_label="Status",
             default_sort="started_at",
             default_desc=True,
+            server_total=total,
+            filter_options=get_args(RunStatus),
         )
         return _page(
             "Runs",
@@ -694,9 +769,15 @@ def create_app(config: ReachConfig) -> Starlette:
             active="/runs",
         )
 
-    def tasks(_: Request) -> Response:
+    def tasks(request: Request) -> Response:
+        try:
+            filters, paging = _query_options(request, "tasks", html=True)
+            total = model.task_count(**filters)
+            paging["offset"] = min(paging["offset"], max(0, (total - 1) // 25) * 25)
+        except ValueError:
+            return _error_page("Invalid query", "Invalid query parameters.", status_code=400)
         def task_rows() -> list[dict[str, Any]]:
-            rows = model.task_summaries()
+            rows = model.task_summaries(**filters, **paging)
             for row in rows:
                 task_id = str(row["id"])
                 row["id"] = _Link(f"/tasks/{task_id}", task_id)
@@ -711,6 +792,15 @@ def create_app(config: ReachConfig) -> Starlette:
                 ("updated_at", "Updated"),
                 ("retained", "Retained"),
             ),
+            request=request,
+            search_fields=("id", "title", "status"),
+            sort_fields=("id", "title", "status", "updated_at"),
+            filter_field="status",
+            filter_label="Status",
+            default_sort="updated_at",
+            default_desc=True,
+            server_total=total,
+            filter_options=get_args(TaskStatus),
         )
         return _page(
             "Tasks",
@@ -840,7 +930,11 @@ def create_app(config: ReachConfig) -> Starlette:
         task_id = request.path_params["task_id"]
         try:
             record = model.task(task_id)
-            related = model.related_run_summaries(task_id)
+            filters, paging = _query_options(request, "runs", html=True, prefix="runs")
+            filters["task_id"] = task_id
+            related_total = model.run_count(**filters)
+            paging["offset"] = min(paging["offset"], max(0, (related_total - 1) // 25) * 25)
+            related = model.run_summaries(**filters, **paging)
         except ValueError:
             return _error_page("Task not found", "Task not found.")
         except (OSError, RuntimeError):
@@ -915,6 +1009,16 @@ def create_app(config: ReachConfig) -> Starlette:
             _table(
                 (("purpose", "Purpose"), ("status", "Status"), ("operation", "Operation"), ("target", "Target"), ("started_at", "Started"), ("id", "Run")),
                 related_rows,
+                request=request,
+                prefix="runs",
+                search_fields=("id", "purpose", "status", "target", "operation"),
+                sort_fields=("started_at", "status", "target", "operation"),
+                filter_field="status",
+                filter_label="Status",
+                default_sort="started_at",
+                default_desc=True,
+                server_total=related_total,
+                filter_options=get_args(RunStatus),
             ),
         ) + '</div>'
         return _page(str(record.get("title") or task_id), "Task continuity detail and purpose-first related execution history.", content, active="/tasks")
@@ -1092,8 +1196,7 @@ def create_app(config: ReachConfig) -> Starlette:
         counts = {
             "skills": sum(int(report.get("count") or 0) for report in skill_reports if report.get("available")),
             "tools": len(model.tooling()),
-            "tasks": len(model.task_summaries(limit=500)),
-            "runs": model.run_count(),
+            **model.operational_counts(),
         }
         payload: dict[str, Any] = {"product": "Hypershell Reach", "status": "ok", "counts": counts}
         if config.topology is not None:
@@ -1118,23 +1221,37 @@ def create_app(config: ReachConfig) -> Starlette:
         items = model.tooling()
         return JSONResponse({"count": len(items), "items": items}, headers={"Cache-Control": "no-store"})
 
-    def api_tasks(_: Request) -> Response:
-        items = model.task_summaries(limit=500)
-        return JSONResponse({"count": len(items), "items": items}, headers={"Cache-Control": "no-store"})
-
-    def api_runs(request: Request) -> Response:
-        raw_limit = request.query_params.get("limit", "100")
+    def _api_records(request: Request, kind: str) -> Response:
         try:
-            limit = int(raw_limit)
+            filters, paging = _query_options(request, kind)
+            if kind == "runs":
+                items = model.run_summaries(**filters, **paging)
+                total = model.run_count(**filters)
+            elif kind == "tasks":
+                items = model.task_summaries(**filters, **paging)
+                total = model.task_count(**filters)
+            else:
+                if model.candidate_store is None:
+                    return JSONResponse({"count": 0, "total": 0, "items": [], "configured": False}, headers={"Cache-Control": "no-store"})
+                _, items = model.candidates(**filters, **paging)
+                total = model.candidate_count(**filters)
         except ValueError:
-            return JSONResponse({"error": "invalid limit"}, status_code=400)
-        if not 1 <= limit <= 500:
-            return JSONResponse({"error": "limit must be between 1 and 500"}, status_code=400)
-        items = model.run_summaries(limit=limit)
+            return JSONResponse({"error": "invalid query parameters"}, status_code=400, headers={"Cache-Control": "no-store"})
+        except (OSError, RuntimeError):
+            return JSONResponse({"error": "read model temporarily unavailable"}, status_code=503, headers={"Cache-Control": "no-store"})
         return JSONResponse(
-            {"count": len(items), "total": model.run_count(), "items": items},
+            {"count": len(items), "total": total, "items": items, "limit": paging["limit"], "offset": paging["offset"]},
             headers={"Cache-Control": "no-store"},
         )
+
+    def api_tasks(request: Request) -> Response:
+        return _api_records(request, "tasks")
+
+    def api_runs(request: Request) -> Response:
+        return _api_records(request, "runs")
+
+    def api_candidates(request: Request) -> Response:
+        return _api_records(request, "candidates")
 
     def health(_: Request) -> Response:
         return JSONResponse({"status": "ok", "role": "reach"}, headers={"Cache-Control": "no-store"})
@@ -1147,6 +1264,7 @@ def create_app(config: ReachConfig) -> Starlette:
             Route("/api/v1/tools", api_tools, methods=["GET"]),
             Route("/api/v1/tasks", api_tasks, methods=["GET"]),
             Route("/api/v1/runs", api_runs, methods=["GET"]),
+            Route("/api/v1/candidates", api_candidates, methods=["GET"]),
             Route("/targets", targets, methods=["GET"]),
             Route("/tooling", tooling, methods=["GET"]),
             Route("/tooling/{tool_id}", tool_detail, methods=["GET"]),

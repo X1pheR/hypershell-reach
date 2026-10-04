@@ -88,6 +88,7 @@ class ExecutorService:
         if not self.serve_socket:
             self._store = RunStore(
                 self.config.workspace.runs,
+                database=self.config.workspace.database,
                 completed_days=self.config.retention.runs.completed_days,
                 reconcile_modes={"async"},
             )
@@ -115,6 +116,7 @@ class ExecutorService:
 
             self._store = RunStore(
                 self.config.workspace.runs,
+                database=self.config.workspace.database,
                 completed_days=self.config.retention.runs.completed_days,
                 reconcile_modes={"async"},
             )

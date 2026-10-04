@@ -33,13 +33,16 @@ This contract does not add peer discovery, leader election, automatic failover, 
 ```yaml
 workspace:
   tmp: /var/tmp/reach
+  database: /var/lib/reach/reach.sqlite3  # optional; explicitly migrate before serving
   runs: /var/lib/reach/runs
   tasks: /var/lib/reach/tasks
   trash: /var/lib/reach/trash
   candidates: /var/lib/reach/candidates  # optional until the deployment migration gate
 ```
 
-All configured workspace paths are explicit absolute paths. `runs` stores automatic execution metadata. `tasks` is the active Task root and `trash` is the backward-compatible configuration key for the Task archive root. New Task records use the Task v2 contract; existing Task v1 YAML remains readable. `candidates`, when configured, stores one Hypershell Reach-owned `candidate-v1` YAML record per Candidate. Candidate v1 now carries monotonic `problem.recurrence_count` with default `1`; existing v1 records that contain only the legacy free-text `problem.recurrence` remain readable and resolve to count `1` until a later distinct occurrence is recorded. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
+All configured workspace paths are explicit absolute paths. With `database` configured, the common SQLite store is authoritative for all operational records. The legacy roots remain migration inputs and compatibility configuration; `candidates` presence remains the explicit Candidate authority flag. A missing or unsupported configured database fails closed. See [Unified persistence](unified-persistence.md).
+
+Without `database`, the compatible legacy storage rules below apply. `runs` stores automatic execution metadata. `tasks` is the active Task root and `trash` is the backward-compatible configuration key for the Task archive root. New Task records use the Task v2 contract; existing Task v1 YAML remains readable. `candidates`, when configured, stores one Hypershell Reach-owned `candidate-v1` YAML record per Candidate. Candidate v1 now carries monotonic `problem.recurrence_count` with default `1`; existing v1 records that contain only the legacy free-text `problem.recurrence` remain readable and resolve to count `1` until a later distinct occurrence is recorded. Omitting `candidates` preserves deployments that have not reached the Candidate storage migration gate. Managed tool sources stay separate and must not be placed under Candidate appdata.
 
 ## Retention
 

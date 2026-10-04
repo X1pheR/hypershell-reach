@@ -30,8 +30,9 @@ class Workspace(BaseModel):
     tasks: str
     trash: str
     candidates: str | None = None
+    database: str | None = None
 
-    @field_validator("tmp", "runs", "tasks", "trash", "candidates")
+    @field_validator("tmp", "runs", "tasks", "trash", "candidates", "database")
     @classmethod
     def require_absolute_paths(cls, value: str | None) -> str | None:
         if value is not None and not Path(value).is_absolute():
