@@ -63,6 +63,98 @@ def _config(tool_root: Path) -> ReachConfig:
 
 
 @pytest.mark.asyncio
+async def test_readonly_managed_route_has_truthful_mcp_annotations_and_rejects_mutations(
+    tmp_path, monkeypatch
+) -> None:
+    script_path = tmp_path / "echo.sh"
+    _write_script(script_path)
+    monkeypatch.setattr(server, "_config", _config(tmp_path), raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", None)
+    recorded = []
+
+    async def fake_run_ssh(**kwargs):
+        recorded.append(kwargs)
+        return {
+            "target": kwargs["target_id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "timed_out": False,
+            "duration_ms": 1,
+            "stdout": {"text": "ok", "bytes": 2, "truncated": False},
+            "stderr": {"text": "", "bytes": 0, "truncated": False},
+        }
+
+    monkeypatch.setattr(server, "run_ssh", fake_run_ssh)
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    for name in ("run_readonly_script", "start_readonly_script"):
+        assert tools[name].annotations.readOnlyHint is True
+        assert tools[name].annotations.destructiveHint is False
+        assert tools[name].annotations.idempotentHint is True
+    assert tools["run_script"].annotations.destructiveHint is True
+
+    payload = json.loads((await server.call_tool(
+        "run_readonly_script",
+        {"script_id": "system.echo", "target": "example",
+         "purpose": "Inspect one bounded managed script using a read-only MCP route.",
+         "arguments": {"message": "safe"}},
+    ))[0].text)
+    assert payload["execution"]["status"] == "succeeded"
+    assert payload["mutating"] is False
+    assert payload["idempotent"] is True
+    assert server._run_store_instance.get(payload["run_id"]).may_mutate is False
+
+    script_path.write_text(script_path.read_text().replace("# mutating: false", "# mutating: true"))
+    denied = (await server.call_tool(
+        "run_readonly_script",
+        {"script_id": "system.echo", "target": "example",
+         "purpose": "Reject mutating registry scripts before a remote execution."},
+    ))[0].text
+    assert "read-only" in denied.lower()
+    assert len(recorded) == 1
+
+
+@pytest.mark.asyncio
+async def test_readonly_async_route_enforces_contract_and_allows_long_tool_timeout(
+    tmp_path, monkeypatch
+) -> None:
+    script_path = tmp_path / "echo.sh"
+    _write_script(script_path)
+    source = script_path.read_text().replace("# timeout_seconds: 15", "# timeout_seconds: 120")
+    script_path.write_text(source)
+    config = _config(tmp_path)
+    config.defaults.max_synchronous_timeout_seconds = 10
+    config.executor.socket_path = str(tmp_path / "executor.sock")
+    monkeypatch.setattr(server, "_config", config, raising=False)
+    monkeypatch.setattr(server, "_run_store_instance", None)
+    captured = []
+
+    async def fake_submit_execution(current_config, submission):
+        captured.append(submission)
+        return {"run_id": "run-readonly", "status": "running", "execution_mode": "async"}
+
+    monkeypatch.setattr(server, "submit_execution", fake_submit_execution)
+    response = json.loads((await server.call_tool(
+        "start_readonly_script",
+        {"script_id": "system.echo", "target": "example",
+         "purpose": "Start a verified read-only script within a registered timeout.",
+         "arguments": {"message": "safe"}},
+    ))[0].text)
+    assert response["run_id"] == "run-readonly"
+    assert captured[0].may_mutate is False
+    assert captured[0].idempotent is True
+    assert captured[0].timeout_seconds == 120
+
+    script_path.write_text(source.replace("# idempotent: true", "# idempotent: false"))
+    denied = (await server.call_tool(
+        "start_readonly_script",
+        {"script_id": "system.echo", "target": "example",
+         "purpose": "Reject a tool whose idempotence contract is not verified."},
+    ))[0].text
+    assert "read-only" in denied.lower()
+    assert len(captured) == 1
+
+
+@pytest.mark.asyncio
 async def test_run_script_uses_registry_content_and_typed_arguments(tmp_path, monkeypatch) -> None:
     script_path = tmp_path / "echo.sh"
     _write_script(script_path)

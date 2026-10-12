@@ -8,7 +8,7 @@
 # requires: [git]
 # mutating: false
 # idempotent: true
-# timeout_seconds: 120
+# timeout_seconds: 75
 # arguments:
 #   - name: repo
 #     type: string

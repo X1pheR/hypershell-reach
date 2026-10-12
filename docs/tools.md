@@ -25,6 +25,14 @@ Duplicate script IDs are rejected. They do not use source precedence.
 
 Returns one script's metadata, source ID, relative path, content hash, size, timeout and typed argument contract. Source code is not returned.
 
+## Read-only managed script execution
+
+Use `run_readonly_script` for a registered script whose contract is both `mutating: false` and `idempotent: true`. Use `start_readonly_script` when its fixed timeout exceeds the synchronous limit or the inspection may take longer than the request transport can sustain. Both routes expose MCP `readOnlyHint=true`, `destructiveHint=false` and `idempotentHint=true`. They retain `openWorldHint=true` because a read-only registered script may inspect external services.
+
+The server rechecks the current registry metadata before dispatch and rejects any script that is mutating or not idempotent. These annotations describe the enforced interface, not a platform approval or a guarantee about untrusted tool-source content. Existing source review, user authorization and all client safeguards continue to apply. The named script's typed arguments, source bytes, provenance and target-capability check remain unchanged. The two routes cannot run caller-authored shell input or arbitrary executables. The asynchronous variant creates the usual Reach Run evidence; execution metadata still records `may_mutate=false`.
+
+Mutating scripts, or scripts that do not qualify for the read-only contract, remain on the existing `run_script` / `start_script` interfaces with their deliberately conservative MCP safety annotations. Do not relabel those generic surfaces as read-only. A client safety refusal still ends the refused operation; the read-only route is for independently legitimate inspection, not an alternate path to a previously denied effect.
+
 ## `run_script`
 
 Inputs:
@@ -123,7 +131,7 @@ Exit `0` means the measurement window is ready, `1` means the window is busy and
 
 Produces a bounded read-only Git work-tree summary. It uses a temporary `HOME`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_OPTIONAL_LOCKS=0` and a command-scoped `safe.directory` override, preserving the isolation contract migrated from Agent Tooling without its shared shell-library dependency.
 
-The caller supplies an absolute repository path and may bound status and `diff --check` diagnostics or require a clean work tree. The result includes branch/HEAD/upstream state, ahead/behind counts, staged/unstaged/untracked/conflict counts, bounded status and diagnostics, and compact-stat line counts. The tool writes no result file; MCP output and Hypershell Reach Run state own transport and execution metadata.
+The caller supplies an absolute repository path and may bound status and `diff --check` diagnostics or require a clean work tree. Its fixed 75-second timeout is below the standard synchronous target ceiling, so the read-only route can run it without an unnecessary asynchronous transport on the standard profile. The result includes branch/HEAD/upstream state, ahead/behind counts, staged/unstaged/untracked/conflict counts, bounded status and diagnostics, and compact-stat line counts. The tool writes no result file; MCP output and Hypershell Reach Run state own transport and execution metadata.
 
 Exit `0` means the requested Git policy passed, `1` means the repository is dirty when cleanliness was required or `diff --check` failed, and `2` means preflight or local Git execution failed.
 
