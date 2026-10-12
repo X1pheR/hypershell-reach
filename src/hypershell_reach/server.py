@@ -1161,6 +1161,44 @@ async def list_tools() -> list[types.Tool]:
             ),
         ),
         types.Tool(
+            name="run_readonly_script",
+            description=(
+                "Run exactly one registered read-only and idempotent managed script. "
+                "The registry is checked server-side before dispatch: scripts with "
+                "mutating=true or idempotent=false are rejected, not downgraded. "
+                "Inputs use the script's typed argument contract, never arbitrary shell "
+                "or source paths. A script with a timeout beyond the synchronous "
+                "limit requires start_readonly_script. purpose explains why the check "
+                "exists, never a command, secret or argument value; one printable line "
+                "up to 512 characters."
+            ),
+            inputSchema=RunScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
+            name="start_readonly_script",
+            description=(
+                "Start a registered read-only and idempotent managed script as a "
+                "durable asynchronous Run. Reject mutating or non-idempotent scripts "
+                "before submission. Use get_run to observe the terminal result. "
+                "No arbitrary command, source file or environment passthrough. "
+                "purpose explains why the inspection exists, never a secret, command "
+                "or argument value; one printable line up to 512 characters."
+            ),
+            inputSchema=RunScriptInput.model_json_schema(),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=True,
+                openWorldHint=True,
+            ),
+        ),
+        types.Tool(
             name="run_script",
             description=(
                 "Run one registered managed script on a compatible configured target. purpose "
@@ -1574,9 +1612,11 @@ async def call_tool(
         elif name == "archive_task":
             args = ArchiveTaskInput(**arguments)
             result = _task_store().archive(args.task_id).model_dump()
-        elif name == "run_script":
+        elif name in ("run_script", "run_readonly_script"):
             args = RunScriptInput(**arguments)
             script = _tool_registry().get(args.script_id)
+            if name == "run_readonly_script" and (script.metadata.mutating or not script.metadata.idempotent):
+                raise ValueError("read-only managed route requires mutating=false and idempotent=true")
             target, connect_timeout, max_output = _target_runtime(
                 args.target, script.metadata.timeout_seconds
             )
@@ -1612,9 +1652,11 @@ async def call_tool(
                 "idempotent": script.metadata.idempotent,
                 "execution": execution,
             }
-        elif name == "start_script":
+        elif name in ("start_script", "start_readonly_script"):
             args = RunScriptInput(**arguments)
             script = _tool_registry().get(args.script_id)
+            if name == "start_readonly_script" and (script.metadata.mutating or not script.metadata.idempotent):
+                raise ValueError("read-only managed route requires mutating=false and idempotent=true")
             target, _, _ = _target_runtime(
                 args.target, script.metadata.timeout_seconds, synchronous=False
             )

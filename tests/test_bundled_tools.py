@@ -123,6 +123,7 @@ def test_bundled_registry_contains_expected_tools() -> None:
     assert git_script.metadata.interpreter == "python3"
     assert git_script.metadata.mutating is False
     assert git_script.metadata.idempotent is True
+    assert git_script.metadata.timeout_seconds == 75
     assert git_script.metadata.required_capabilities() == ["git", "python3"]
     assert [argument.name for argument in git_script.metadata.arguments] == [
         "repo",

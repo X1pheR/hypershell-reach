@@ -39,6 +39,8 @@ def test_tools_have_truthful_annotations() -> None:
         "update_task": (False, False, False, False),
         "close_task": (False, False, True, False),
         "archive_task": (False, False, True, False),
+        "run_readonly_script": (True, False, True, True),
+        "start_readonly_script": (True, False, True, True),
         "run_script": (False, True, False, True),
         "start_script": (False, True, False, True),
         "run_command": (False, True, False, True),
@@ -78,7 +80,7 @@ def test_candidate_approval_tool_does_not_confuse_state_mechanics_with_authoriza
 def test_execution_tools_require_bounded_purpose_with_safe_contract_guidance() -> None:
     tools = {tool.name: tool for tool in asyncio.run(list_tools())}
 
-    for name in ("run_command", "run_shell", "run_script", "start_command", "start_shell", "start_script"):
+    for name in ("run_command", "run_shell", "run_script", "start_command", "start_shell", "start_script", "run_readonly_script", "start_readonly_script"):
         tool = tools[name]
         schema = tool.inputSchema
         purpose = schema["properties"]["purpose"]
