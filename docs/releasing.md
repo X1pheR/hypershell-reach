@@ -31,6 +31,10 @@ Hypershell Reach uses Semantic Versioning. While the project is on `0.x`, minor 
 
 Repository CI validates source commits. The tag-triggered `Release` workflow validates and publishes accepted GitHub releases. Production deployment remains a separate operator action. The workflow publishes versioned container images to GHCR and records their digest in the immutable GitHub release. It does not publish to a Python package registry. Operators verify the selected image against `IMAGE.txt` and its version/revision labels before deployment; a release does not automatically replace a running peer. Reach peer replacement must be executed from an independent recovery path, never by the peer being replaced.
 
+## Version 0.12 managed read-only tool routes
+
+This minor release adds `run_readonly_script` and `start_readonly_script` as explicitly read-only MCP surfaces. Both require a registered, reviewed script whose metadata is `mutating=false` and `idempotent=true`; unsafe or unknown script metadata is rejected before execution. The existing generic `run_script` and `start_script` routes remain compatible and conservatively marked as potentially destructive. Bundled `git.summary-bounded` now has a 75-second timeout below the standard synchronous ceiling. No storage migration or service configuration change is required. After deployment, refresh gateway and client MCP tool metadata and prove the new route and its refusal of a mutating script before accepting consumer parity. A new route does not bypass a client safety refusal.
+
 ## Version 0.11 persistence upgrade
 
 This minor feature release adds opt-in schema-v2 unified persistence. Follow [Unified persistence](unified-persistence.md) for the offline copy/validate/switch migration from v0.10, current-state rollback export, writable local directory and WAL backup requirements. Keep each peer independent, preserve Home-only Candidate authority in private deployments, and retain old stores until accepted retirement. Cancelled Tasks now also require explicit reconciliation of pending mutations. No visual redesign or new browser writer is included.
