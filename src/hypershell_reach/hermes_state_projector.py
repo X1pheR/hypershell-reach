@@ -9,7 +9,18 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
+# Execute in the remote Hermes interpreter, which uses ruamel.yaml on current builds.
+# Older Hermes environments may still provide PyYAML. Neither is a Reach runtime dependency here.
+try:
+    from ruamel.yaml import YAML
+
+    def load_config_yaml(text: str):
+        return YAML(typ="safe").load(text)
+except ImportError:
+    import yaml
+
+    def load_config_yaml(text: str):
+        return yaml.safe_load(text)
 
 
 def _normalize_names(value) -> list[str]:
@@ -28,7 +39,7 @@ def project_state(
     repo_path: Path,
     consumer_platform: str | None,
 ) -> dict[str, object]:
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    data = load_config_yaml(config_path.read_text(encoding="utf-8")) or {}
     skills = data.get("skills") if isinstance(data, dict) else {}
     if not isinstance(skills, dict):
         skills = {}
