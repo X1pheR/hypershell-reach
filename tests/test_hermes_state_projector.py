@@ -53,3 +53,32 @@ def test_projector_returns_only_skill_state_and_effective_names(tmp_path) -> Non
     assert payload["external_dirs"] == ["/skills/external"]
     assert "secret_value" not in result.stdout
     assert "do-not-return" not in result.stdout
+
+def test_projector_supports_ruamel_without_pyyaml(tmp_path) -> None:
+    # Simulate the interpreter where ruamel is available but PyYAML is absent.
+    import runpy
+    import sys
+    from types import ModuleType
+    old = {name: sys.modules.get(name) for name in ("ruamel", "ruamel.yaml", "yaml")}
+    try:
+        ruamel = ModuleType("ruamel")
+        ruamel.__path__ = []
+        child = ModuleType("ruamel.yaml")
+        class FakeYAML:
+            def __init__(self, typ):
+                assert typ == "safe"
+            def load(self, text):
+                return {"skills": {"disabled": ["disabled-a"]}}
+        child.YAML = FakeYAML
+        ruamel.yaml = child
+        sys.modules["ruamel"] = ruamel
+        sys.modules["ruamel.yaml"] = child
+        sys.modules["yaml"] = None
+        scope = runpy.run_path(str(PROJECTOR), run_name="projector_fixture")
+        assert scope["load_config_yaml"]("skills: []") == {"skills": {"disabled": ["disabled-a"]}}
+    finally:
+        for name, value in old.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
