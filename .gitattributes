@@ -1,0 +1,2 @@
+# Pin vendor-maintained minified browser bundles as binary distribution assets.
+src/hypershell_reach/_assets/*.min.js -diff -text

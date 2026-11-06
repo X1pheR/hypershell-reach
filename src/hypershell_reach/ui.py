@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from html import escape
 from typing import Any, get_args
 from urllib.parse import urlencode
+from pathlib import Path, PurePosixPath
+import json
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -17,6 +19,8 @@ from .runs import RunStatus, RunOperation, RunExecutionMode, RunExecutionClass
 from .tasks import TaskStatus
 from .candidates import CandidateState
 from .ui_assets import CSS, REACH_MARK_SVG, JAVASCRIPT
+from .skill_pages import render_skill_document, read_skill_image, skill_url, file_url, asset_url, download_url
+from .skills import _resolve_file, list_skill_files
 from .ui_docs import USER_GUIDE, DocumentationPage, TocItem, documentation_groups, render_document, technical_page
 
 _NAV = (
@@ -94,7 +98,12 @@ def _context_help(active: str | None) -> str:
     )
 
 
-def _page(title: str, intro: str, content: str, *, active: str | None = None) -> HTMLResponse:
+def _page(title: str, intro: str, content: str, *, active: str | None = None, diagrams: bool = False) -> HTMLResponse:
+    diagram_scripts = (
+        '<script src="/assets/mermaid-12.0.0.min.js" defer></script>'
+        '<script src="/assets/dompurify-3.4.16.min.js" defer></script>'
+        '<script src="/assets/skill-mermaid.js" defer></script>'
+    ) if diagrams else ""
     document = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -143,9 +152,17 @@ def _page(title: str, intro: str, content: str, *, active: str | None = None) ->
     </div>
   </dialog>
   <script src="/assets/app.js" defer></script>
+  {diagram_scripts}
 </body>
 </html>"""
-    return HTMLResponse(document, headers=_SECURITY_HEADERS)
+    headers = dict(_SECURITY_HEADERS)
+    if diagrams:
+        # Mermaid 12 generates inline SVG presentation attributes/styles.
+        # Scope the CSS exception to Skill detail pages; scripts remain self-only.
+        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
+            "style-src 'self'", "style-src 'self' 'unsafe-inline'"
+        )
+    return HTMLResponse(document, headers=headers)
 
 
 def _status_class(value: str) -> str:
@@ -1102,6 +1119,146 @@ def create_app(config: ReachConfig) -> Starlette:
         ) + '</div>'
         return _page(str(record.get("title") or candidate_id), "Structured Candidate proposal, safety, ownership and acceptance contract.", content, active="/tooling")
 
+    def skill_detail(request: Request) -> Response:
+        skill_id = request.path_params["skill_id"]
+        try:
+            skill = model.skill(skill_id)
+        except ValueError:
+            return _error_page("Skill not found", "Skill not found.")
+        except (OSError, RuntimeError):
+            return _error_page("Skills unavailable", "Skills temporarily unavailable.", status_code=503)
+
+        selected = request.query_params.get("file", "SKILL.md")
+        manifest = tuple(str(item["path"]) for item in list_skill_files(skill))
+        if selected not in manifest:
+            return _error_page("File not found", "Skill file not found.")
+
+        try:
+            if PurePosixPath(selected).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                rendered = ('<img class="skill-preview-image" alt="' + escape(selected, quote=True)
+                            + '" src="' + escape(asset_url(skill.id, selected), quote=True) + '">')
+                toc = ()
+            elif PurePosixPath(selected).suffix.lower() == ".md":
+                document = render_skill_document(skill, selected)
+                rendered = document.html
+                toc = document.toc
+            else:
+                raw_file = _resolve_file(skill, selected)
+                if raw_file.stat().st_size > 1_048_576:
+                    rendered = '<div class="notice">File too large to preview. Use the read-only file link.</div>'
+                else:
+                    try:
+                        raw = raw_file.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        rendered = '<p class="muted">Binary file: preview unavailable.</p>'
+                    else:
+                        rendered = '<pre><code>' + escape(raw) + '</code></pre>'
+                toc = ()
+        except (OSError, ValueError, UnicodeError):
+            return _error_page("File unavailable", "Skill file unavailable.", status_code=404)
+
+        title = str(skill.name)
+        details = _details((
+            ("id", "Qualified ID", skill.id),
+            ("source", "Source", skill.source_id),
+            ("source_type", "Source type", skill.source_type),
+            ("provenance", "Origin", skill.provenance),
+            ("effective", "Active", skill.effective),
+            ("enabled", "Enabled", skill.enabled),
+            ("version", "Version", skill.frontmatter.get("version", "Not declared")),
+            ("category", "Category", skill.category),
+            ("description", "Description", skill.description),
+            ("sha256", "SKILL.md SHA-256", skill.sha256),
+        ))
+        other_metadata = json.dumps(skill.frontmatter, ensure_ascii=False, indent=2, default=str)
+        file_links = "".join(
+            '<a' + (' aria-current="page"' if path == selected else '') +
+            ' href="' + escape(file_url(skill.id, path), quote=True) + '">' +
+            escape(path) + '</a>'
+            for path in manifest
+        )
+        sidebar = (
+            '<aside class="docs-navigation docs-navigation-desktop">'
+            '<nav aria-label="Skill files"><p class="docs-nav-title">Skill files</p>'
+            '<div class="docs-nav-links">' + file_links + '</div></nav></aside>'
+            '<details class="docs-navigation docs-navigation-mobile"><summary>Skill files</summary>'
+            '<nav class="docs-nav-links" aria-label="Skill files">' + file_links + '</nav></details>'
+        )
+        original_toggle = ""
+        extra_provenance = (
+            '<details class="skill-frontmatter"><summary>Source provenance details</summary>'
+            '<pre><code>' + escape(json.dumps(skill.provenance_details, ensure_ascii=False, indent=2, default=str))
+            + '</code></pre></details>'
+        ) if skill.provenance_details else ""
+        if selected == "SKILL.md":
+            # The raw source remains accessible, including its frontmatter.
+            original = _resolve_file(skill, "SKILL.md").read_text(encoding="utf-8")
+            original_toggle = (
+                '<details class="skill-source"><summary>Original SKILL.md (complete source)</summary>'
+                '<pre><code>' + escape(original) + '</code></pre></details>'
+            )
+        article = (
+            '<article class="docs-article skill-article">'
+            '<p class="skill-breadcrumb"><a href="/skills">← All skills</a> / ' + escape(selected) + '</p>'
+            '<div class="skill-meta">' + details + '</div>'
+            '<details class="skill-frontmatter"><summary>Frontmatter metadata</summary>'
+            '<pre><code>' + escape(other_metadata) + '</code></pre></details>' +
+            extra_provenance +
+            '<p class="skill-source-link"><a href="' + escape(download_url(skill.id, selected), quote=True) +
+            '">Open original file (read-only attachment)</a></p>' +
+            '<div class="skill-markdown">' + rendered + '</div>' +
+            original_toggle + '</article>'
+        )
+        content = (
+            '<div class="docs-layout skill-layout">' + sidebar + article +
+            _docs_toc(toc) + '</div>'
+        )
+        return _page(
+            title, "Read-only Agent Skill package and source content.", content,
+            active="/skills", diagrams='class="skill-mermaid-fallback"' in rendered,
+        )
+
+    def skill_library(request: Request) -> Response:
+        filename = request.path_params["filename"]
+        allowed = {"mermaid-12.0.0.min.js", "dompurify-3.4.16.min.js", "skill-mermaid.js"}
+        if filename not in allowed:
+            return _error_page("Asset not found", "Asset not found.")
+        try:
+            data = (Path(__file__).resolve().with_name("_assets") / filename).read_bytes()
+        except OSError:
+            return _error_page("Asset unavailable", "Diagram library unavailable.", status_code=503)
+        return Response(data, media_type="application/javascript", headers=_ASSET_HEADERS)
+
+    def skill_asset(request: Request) -> Response:
+        try:
+            skill = model.skill(request.path_params["skill_id"])
+            data, media_type = read_skill_image(skill, request.path_params["asset_path"])
+        except ValueError:
+            return _error_page("Asset not found", "Skill image not found.")
+        except (OSError, RuntimeError):
+            return _error_page("Asset unavailable", "Skill image unavailable.", status_code=503)
+        return Response(data, media_type=media_type, headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        })
+
+    def skill_file(request: Request) -> Response:
+        try:
+            skill = model.skill(request.path_params["skill_id"])
+            relative = request.path_params["file_path"]
+            if relative not in {str(item["path"]) for item in list_skill_files(skill)}:
+                raise ValueError("outside package")
+            data = _resolve_file(skill, relative).read_bytes()
+        except ValueError:
+            return _error_page("File not found", "Skill file not found.")
+        except (OSError, RuntimeError):
+            return _error_page("File unavailable", "Skill file unavailable.", status_code=503)
+        return Response(data, media_type="application/octet-stream", headers={
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "attachment; filename=skill-file",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        })
+
     def skills(request: Request) -> Response:
         try:
             rows, reports = model.skills()
@@ -1136,7 +1293,7 @@ def create_app(config: ReachConfig) -> Starlette:
                         ("description", "Description"),
                         ("provenance", "Origin"),
                     ),
-                    rows,
+                    [{**row, "name": _Link(skill_url(str(row["id"])), str(row["name"]))} for row in rows],
                     request=request,
                     search_fields=("name", "description", "category", "source", "provenance"),
                     sort_fields=("name", "category", "source", "provenance"),
@@ -1274,6 +1431,9 @@ def create_app(config: ReachConfig) -> Starlette:
             Route("/tasks/{task_id}", task_detail, methods=["GET"]),
             Route("/candidates/{candidate_id}", candidate_detail, methods=["GET"]),
             Route("/skills", skills, methods=["GET"]),
+            Route("/skills/{skill_id}/assets/{asset_path:path}", skill_asset, methods=["GET"]),
+            Route("/skills/{skill_id}/files/{file_path:path}", skill_file, methods=["GET"]),
+            Route("/skills/{skill_id}", skill_detail, methods=["GET"]),
             Route("/help", help_page, methods=["GET"]),
             Route("/help/technical/{slug}", technical_help, methods=["GET"]),
             Route("/docs", docs_compatibility, methods=["GET"]),
@@ -1282,6 +1442,7 @@ def create_app(config: ReachConfig) -> Starlette:
             Route("/assets/app.css", stylesheet, methods=["GET"]),
             Route("/assets/app.js", javascript, methods=["GET"]),
             Route("/assets/reach-mark.svg", product_mark, methods=["GET"]),
+            Route("/assets/{filename}", skill_library, methods=["GET"]),
             Route("/healthz", health, methods=["GET"]),
         ]
     )

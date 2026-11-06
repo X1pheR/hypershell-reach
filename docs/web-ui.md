@@ -48,3 +48,7 @@ With unified persistence, operational lists, counts and retention use SQL predic
 Use `sort` and `dir=asc|desc`; booleans are `true|false`. Tasks also accept `archived=all`, while the default remains active storage. Time filters require timezone-aware timestamps. Invalid recognized parameters return 400. An unconfigured Candidate endpoint returns `configured=false` and no records; it does not enable storage.
 
 `/api/v1/summary` adds uncapped operational counts for archived, active and blocked Tasks, running/ambiguous/error Runs. The server-rendered tables and Task-related Run history page over the same read model; no client SQLite access or mutation endpoints are added. Text search is bounded parameterized search, not a claim of a full-text analytics index.
+
+### Skill details and deeplinks
+
+The Skills inventory links to `/skills/<encoded-source-qualified-id>`, the canonical read-only Skill detail route. Nested image and file read routes are restricted to the selected Skill's existing manifest, with no new write authority. Source, provenance, declared version, full Markdown and supporting files are available in the same product UI. See [Skills](skills.md) for Markdown, Mermaid and path-safety details. Existing Task, Run and Tool detail routes are unchanged.

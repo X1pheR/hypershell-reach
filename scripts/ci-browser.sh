@@ -52,6 +52,33 @@ name: example
 description: Example browser fixture skill.
 ---
 # Example
+
+## Skills overview
+
+| Name | Purpose |
+| --- | --- |
+| Example | Render Markdown |
+
+- [x] Complete
+
+```python
+print("syntax highlighted")
+```
+
+[Read reference](references/guide.md)
+
+```mermaid
+flowchart LR
+ A[One] --> B[Two]
+```
+
+<script>window.skillXssExecuted = true;</script>
+MD
+mkdir -p "${FIXTURE_ROOT}/skills/example/references"
+cat > "${FIXTURE_ROOT}/skills/example/references/guide.md" <<'MD'
+# Support reference
+
+[Back to main Skill](../SKILL.md)
 MD
 
 cat > "${FIXTURE_ROOT}/registry.md" <<'MD'
