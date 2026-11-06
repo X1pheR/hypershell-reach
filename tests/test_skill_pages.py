@@ -131,3 +131,31 @@ def test_symlinked_supporting_file_does_not_escape_skill_package(tmp_path):
     (skill_dir / "references" / "indirect.md").symlink_to(tmp_path / "skills" / "secret.md")
     assert client.get("/skills/local%3Aexample?file=references%2Findirect.md").status_code == 404
     assert client.get("/skills/local%3Aexample/files/references/indirect.md").status_code == 404
+
+
+def test_hermes_content_only_inventory_skill_has_matching_detail_route(tmp_path):
+    """An unresolved Hermes UI package is discoverable, not inactive/404."""
+    from hypershell_reach.config import SkillSource
+    from hypershell_reach.read_model import ReachReadModel
+
+    config = _config(tmp_path)
+    source = SkillSource(
+        id="hermes",
+        type="hermes",
+        path=str(tmp_path / "skills"),
+        state={"mode": "snapshot", "snapshot_path": str(tmp_path / "hermes-state.json")},
+    )
+    sources = config.sources.model_copy(update={"skills": [source]})
+    config = config.model_copy(update={"sources": sources})
+    model = ReachReadModel(config)
+    listed, _reports = model.skills()
+    assert len(listed) == 1 and listed[0]["id"] == "hermes:example"
+    assert model.skill("hermes:example").effective is False
+
+    client = TestClient(create_app(config))
+    assert 'href="/skills/hermes%3Aexample"' in client.get("/skills").text
+    detail = client.get("/skills/hermes%3Aexample")
+    assert detail.status_code == 200
+    assert "Original SKILL.md" in detail.text
+    assert "Unresolved (content-only)" in detail.text
+    assert client.get("/skills/hermes%3Aunknown").status_code == 404
