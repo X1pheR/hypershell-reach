@@ -169,8 +169,11 @@ class ReachReadModel:
             return {package.id: package for package in packages}
 
         package = self._cached("skill-packages:" + source_id, 60.0, load).get(skill_id)
-        if package is None or not package.effective:
-            raise ValueError("unknown or inactive skill")
+        # The UI inventory is deliberately content-only for Hermes: unlike MCP
+        # discovery, it does not resolve Hermes activation state. Keep details
+        # aligned with that same UI inventory; unresolved does not mean missing.
+        if package is None:
+            raise ValueError("unknown skill")
         return package
 
     def candidates(self, *, limit: int = 100, **filters: Any) -> tuple[bool, list[dict[str, Any]]]:

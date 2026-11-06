@@ -31,6 +31,10 @@ Hypershell Reach uses Semantic Versioning. While the project is on `0.x`, minor 
 
 Repository CI validates source commits. The tag-triggered `Release` workflow validates and publishes accepted GitHub releases. Production deployment remains a separate operator action. The workflow publishes versioned container images to GHCR and records their digest in the immutable GitHub release. It does not publish to a Python package registry. Operators verify the selected image against `IMAGE.txt` and its version/revision labels before deployment; a release does not automatically replace a running peer. Reach peer replacement must be executed from an independent recovery path, never by the peer being replaced.
 
+## Version 0.12.1 Hermes content-only Skill detail parity
+
+Fix the Web UI's Hermes Skill detail route to use the same content-only eligibility as the existing inventory; an unresolved effective state is not an absent Skill. MCP Skill discovery remains governed by the full effective Hermes registry, with no change to lifecycle authority or read-only file path restrictions. Add a Hermes snapshot-backed regression for list-to-detail parity after v0.12.0 was observed returning 404 on a live, listed Hermes Skill.
+
 ## Version 0.12 Skill browser details and deeplinks
 
 The Skills list now links each active source-qualified ID to `/skills/<encoded-skill-id>`; the exact complete Markdown and package-local supporting files can be read from authenticated read-only UI routes. Pinned Mermaid 12.0.0/DOMPurify 3.4.16 distributions are served locally only on Skill pages, alongside the established markdown-it-py renderer, maintained task-list support and Pygments. New routes are additive and do not change MCP Skill contracts, Hermes activation/lifecycle, or Task/Run/Tool paths. Accept release only with exact-source regressions and browser verification of diagrams, relative links and security headers.
