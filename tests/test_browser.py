@@ -200,3 +200,40 @@ def test_wp6_read_only_provenance_detail_navigation(page: Page) -> None:
 
     _assert_wcag_a_aa(page)
     _assert_clean_browser(errors)
+
+
+def test_skill_detail_deeplink_markdown_diagram_and_back_forward(page: Page) -> None:
+    errors = _observe_page(page)
+    page.set_viewport_size({"width": 1365, "height": 900})
+    page.goto(BASE_URL + "/skills", wait_until="networkidle")
+    link = page.get_by_role("link", name="example", exact=True).first
+    expect(link).to_have_attribute("href", "/skills/local%3Aexample")
+    link.click()
+    expect(page).to_have_url(BASE_URL + "/skills/local%3Aexample")
+    expect(page.get_by_role("heading", name="Skills overview")).to_be_visible()
+    expect(page.locator(".skill-markdown table")).to_have_count(1)
+    expect(page.locator(".skill-markdown .highlight")).to_have_count(1)
+    expect(page.locator(".skill-markdown .task-list-item-checkbox")).to_have_count(1)
+    expect(page.locator(".skill-diagram svg")).to_have_count(1, timeout=20000)
+    assert not page.evaluate("window.skillXssExecuted === true")
+    page.reload(wait_until="networkidle")
+    expect(page.locator(".skill-diagram svg")).to_have_count(1, timeout=20000)
+    page.get_by_role("link", name="references/guide.md").click()
+    expect(page.get_by_role("heading", name="Support reference")).to_be_visible()
+    page.go_back(wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Skills overview")).to_be_visible()
+    page.go_back(wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Skills", exact=True).first).to_be_visible()
+    page.go_forward(wait_until="networkidle")
+    expect(page.get_by_role("heading", name="Skills overview")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    _assert_clean_browser(errors)
+
+
+def test_skill_detail_mobile_and_unknown_skill(page: Page) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(BASE_URL + "/skills/local%3Aexample", wait_until="networkidle")
+    expect(page.locator("details.docs-navigation-mobile")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+    page.goto(BASE_URL + "/skills/local%3Aunknown")
+    assert page.locator("body").inner_text().strip() == "Skill not found."

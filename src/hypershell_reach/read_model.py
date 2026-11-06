@@ -152,6 +152,27 @@ class ReachReadModel:
 
         return self._cached("skills", 60.0, load)
 
+    def skill(self, skill_id: str):
+        """Return a Skill package from the same configured content sources as the listing."""
+        source_id, sep, _name = skill_id.partition(":")
+        if not sep or not _name:
+            raise ValueError("invalid source-qualified skill ID")
+        source = next(
+            (item for item in self.config.sources.skills if item.enabled and item.id == source_id),
+            None,
+        )
+        if source is None:
+            raise ValueError("unknown skill source")
+
+        def load():
+            packages, _report = inspect_skill_source(source)
+            return {package.id: package for package in packages}
+
+        package = self._cached("skill-packages:" + source_id, 60.0, load).get(skill_id)
+        if package is None or not package.effective:
+            raise ValueError("unknown or inactive skill")
+        return package
+
     def candidates(self, *, limit: int = 100, **filters: Any) -> tuple[bool, list[dict[str, Any]]]:
         if self.candidate_store is not None:
             return True, [

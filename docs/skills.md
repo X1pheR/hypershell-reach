@@ -137,3 +137,15 @@ Hermes provenance is derived from the metadata already stored inside its active 
 - otherwise → `local`.
 
 Hub source, identifier and trust metadata are retained when present.
+
+## Browser Skill detail routes
+
+The read-only Web UI links each row of the Skills inventory to its canonical source-qualified detail route, for example `/skills/hermes%3Ahypershell-hermes-vm-operations`. Encode the entire Skill ID as **one URL path segment**. The route supports direct navigation, refresh and ordinary browser history without JavaScript routing.
+
+A Skill detail displays its source and provenance, version (when declared by the Skill frontmatter), the full `SKILL.md` rendered as Markdown, its complete original text, and every permitted supporting file in the package manifest. Relative links are resolved against the currently viewed file and must resolve to a manifest-listed file inside the same package. Unknown/inactive Skill IDs and missing files receive HTTP 404. Unavailable configured sources receive HTTP 503.
+
+Markdown rendering uses the maintained `markdown-it-py` parser (from the same MarkdownIt family used in HomeSight), `mdit-py-plugins` for GFM task lists and `Pygments` for syntax highlighting. The browser renders Mermaid fences using locally bundled **Mermaid 12.0.0** and **DOMPurify 3.4.16**, matching the reviewed HomeSight renderer dependencies. Only Skill pages containing Mermaid fences load those JavaScript assets. Diagram sources remain visible if the browser cannot render them.
+
+Safety is enforced at two independent boundaries: untrusted Markdown disables raw HTML and rewrites URLs to safe schemes or manifest-scoped package paths; the read model refuses nonexistent, symlinked, escaped or unauthorized package paths. Inline images accept only a limited set of raster formats; other files are previewed as escaped text or served as read-only octet-stream attachments, never as active browser HTML/JS. The existing authenticated read-only exposure and strict JavaScript CSP remain in force. Only Skill detail pages allow inline **styles** because Mermaid-generated sanitized SVG requires them; no inline JavaScript is permitted.
+
+The browser UI does **not** change Hermes installation, activation, update, removal, or package state, and the existing MCP `skill_get` and `skill_read_file` byte-range contracts remain unchanged.

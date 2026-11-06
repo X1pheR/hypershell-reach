@@ -280,6 +280,114 @@ code { font-size: .86em; }
 .docs-toc a.level-3 { padding-left: 1.1rem; font-size: .8rem; }
 .docs-toc .empty-toc { margin: 0; color: var(--muted); font-size: .82rem; }
 
+
+/* Skill pages reuse the Help/documentation layout and theme primitives. */
+.skill-layout .docs-navigation { overflow-wrap: anywhere; }
+.skill-article { min-width: 0; }
+.skill-breadcrumb { margin: 0 0 1.2rem; color: var(--muted); }
+.skill-breadcrumb a { color: var(--accent-strong); }
+.skill-meta { margin-bottom: 1.3rem; padding: 1rem; border: 1px solid var(--border-soft); border-radius: .75rem; background: var(--surface-raised); }
+.skill-meta .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.skill-meta dd { overflow-wrap: anywhere; }
+.skill-frontmatter, .skill-source { margin: 1rem 0; }
+.skill-frontmatter summary, .skill-source summary { padding: .6rem 0; cursor: pointer; color: var(--structural-cyan); }
+.skill-markdown img { max-width: 100%; height: auto; }
+.skill-markdown input.task-list-item-checkbox { margin-right: .5rem; accent-color: var(--accent); }
+.skill-markdown .task-list-item { list-style: none; }
+.skill-markdown pre.highlight { overflow-x: auto; background: #151515; color: #f8f8f2; }
+.skill-markdown .skill-mermaid-fallback { border-left: 3px solid var(--structural-pink); }
+.skill-diagram { max-width: 100%; overflow-x: auto; }
+.skill-diagram svg { display: block; max-width: 100%; height: auto; margin-inline: auto; }
+@media (max-width: 760px) {
+  .skill-meta .detail-grid { grid-template-columns: 1fr; }
+}
+
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.skill-markdown .highlight .hll { background-color: #49483e }
+.skill-markdown .highlight { background: #272822; color: #f8f8f2 }
+.skill-markdown .highlight .c { color: #959077 } /* Comment */
+.skill-markdown .highlight .err { color: #ed007e; background-color: #1e0010 } /* Error */
+.skill-markdown .highlight .esc { color: #f8f8f2 } /* Escape */
+.skill-markdown .highlight .g { color: #f8f8f2 } /* Generic */
+.skill-markdown .highlight .k { color: #66d9ef } /* Keyword */
+.skill-markdown .highlight .l { color: #ae81ff } /* Literal */
+.skill-markdown .highlight .n { color: #f8f8f2 } /* Name */
+.skill-markdown .highlight .o { color: #ff4689 } /* Operator */
+.skill-markdown .highlight .x { color: #f8f8f2 } /* Other */
+.skill-markdown .highlight .p { color: #f8f8f2 } /* Punctuation */
+.skill-markdown .highlight .ch { color: #959077 } /* Comment.Hashbang */
+.skill-markdown .highlight .cm { color: #959077 } /* Comment.Multiline */
+.skill-markdown .highlight .cp { color: #959077 } /* Comment.Preproc */
+.skill-markdown .highlight .cpf { color: #959077 } /* Comment.PreprocFile */
+.skill-markdown .highlight .c1 { color: #959077 } /* Comment.Single */
+.skill-markdown .highlight .cs { color: #959077 } /* Comment.Special */
+.skill-markdown .highlight .gd { color: #ff4689 } /* Generic.Deleted */
+.skill-markdown .highlight .ge { color: #f8f8f2; font-style: italic } /* Generic.Emph */
+.skill-markdown .highlight .ges { color: #f8f8f2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.skill-markdown .highlight .gr { color: #f8f8f2 } /* Generic.Error */
+.skill-markdown .highlight .gh { color: #f8f8f2 } /* Generic.Heading */
+.skill-markdown .highlight .gi { color: #a6e22e } /* Generic.Inserted */
+.skill-markdown .highlight .go { color: #66d9ef } /* Generic.Output */
+.skill-markdown .highlight .gp { color: #ff4689; font-weight: bold } /* Generic.Prompt */
+.skill-markdown .highlight .gs { color: #f8f8f2; font-weight: bold } /* Generic.Strong */
+.skill-markdown .highlight .gu { color: #959077 } /* Generic.Subheading */
+.skill-markdown .highlight .gt { color: #f8f8f2 } /* Generic.Traceback */
+.skill-markdown .highlight .kc { color: #66d9ef } /* Keyword.Constant */
+.skill-markdown .highlight .kd { color: #66d9ef } /* Keyword.Declaration */
+.skill-markdown .highlight .kn { color: #ff4689 } /* Keyword.Namespace */
+.skill-markdown .highlight .kp { color: #66d9ef } /* Keyword.Pseudo */
+.skill-markdown .highlight .kr { color: #66d9ef } /* Keyword.Reserved */
+.skill-markdown .highlight .kt { color: #66d9ef } /* Keyword.Type */
+.skill-markdown .highlight .ld { color: #e6db74 } /* Literal.Date */
+.skill-markdown .highlight .m { color: #ae81ff } /* Literal.Number */
+.skill-markdown .highlight .s { color: #e6db74 } /* Literal.String */
+.skill-markdown .highlight .na { color: #a6e22e } /* Name.Attribute */
+.skill-markdown .highlight .nb { color: #f8f8f2 } /* Name.Builtin */
+.skill-markdown .highlight .nc { color: #a6e22e } /* Name.Class */
+.skill-markdown .highlight .no { color: #66d9ef } /* Name.Constant */
+.skill-markdown .highlight .nd { color: #a6e22e } /* Name.Decorator */
+.skill-markdown .highlight .ni { color: #f8f8f2 } /* Name.Entity */
+.skill-markdown .highlight .ne { color: #a6e22e } /* Name.Exception */
+.skill-markdown .highlight .nf { color: #a6e22e } /* Name.Function */
+.skill-markdown .highlight .nl { color: #f8f8f2 } /* Name.Label */
+.skill-markdown .highlight .nn { color: #f8f8f2 } /* Name.Namespace */
+.skill-markdown .highlight .nx { color: #a6e22e } /* Name.Other */
+.skill-markdown .highlight .py { color: #f8f8f2 } /* Name.Property */
+.skill-markdown .highlight .nt { color: #ff4689 } /* Name.Tag */
+.skill-markdown .highlight .nv { color: #f8f8f2 } /* Name.Variable */
+.skill-markdown .highlight .ow { color: #ff4689 } /* Operator.Word */
+.skill-markdown .highlight .pm { color: #f8f8f2 } /* Punctuation.Marker */
+.skill-markdown .highlight .w { color: #f8f8f2 } /* Text.Whitespace */
+.skill-markdown .highlight .mb { color: #ae81ff } /* Literal.Number.Bin */
+.skill-markdown .highlight .mf { color: #ae81ff } /* Literal.Number.Float */
+.skill-markdown .highlight .mh { color: #ae81ff } /* Literal.Number.Hex */
+.skill-markdown .highlight .mi { color: #ae81ff } /* Literal.Number.Integer */
+.skill-markdown .highlight .mo { color: #ae81ff } /* Literal.Number.Oct */
+.skill-markdown .highlight .sa { color: #e6db74 } /* Literal.String.Affix */
+.skill-markdown .highlight .sb { color: #e6db74 } /* Literal.String.Backtick */
+.skill-markdown .highlight .sc { color: #e6db74 } /* Literal.String.Char */
+.skill-markdown .highlight .dl { color: #e6db74 } /* Literal.String.Delimiter */
+.skill-markdown .highlight .sd { color: #e6db74 } /* Literal.String.Doc */
+.skill-markdown .highlight .s2 { color: #e6db74 } /* Literal.String.Double */
+.skill-markdown .highlight .se { color: #ae81ff } /* Literal.String.Escape */
+.skill-markdown .highlight .sh { color: #e6db74 } /* Literal.String.Heredoc */
+.skill-markdown .highlight .si { color: #e6db74 } /* Literal.String.Interpol */
+.skill-markdown .highlight .sx { color: #e6db74 } /* Literal.String.Other */
+.skill-markdown .highlight .sr { color: #e6db74 } /* Literal.String.Regex */
+.skill-markdown .highlight .s1 { color: #e6db74 } /* Literal.String.Single */
+.skill-markdown .highlight .ss { color: #e6db74 } /* Literal.String.Symbol */
+.skill-markdown .highlight .bp { color: #f8f8f2 } /* Name.Builtin.Pseudo */
+.skill-markdown .highlight .fm { color: #a6e22e } /* Name.Function.Magic */
+.skill-markdown .highlight .vc { color: #f8f8f2 } /* Name.Variable.Class */
+.skill-markdown .highlight .vg { color: #f8f8f2 } /* Name.Variable.Global */
+.skill-markdown .highlight .vi { color: #f8f8f2 } /* Name.Variable.Instance */
+.skill-markdown .highlight .vm { color: #f8f8f2 } /* Name.Variable.Magic */
+.skill-markdown .highlight .il { color: #ae81ff } /* Literal.Number.Integer.Long */
+
 .mobile-navigation-sheet { width: min(24rem, calc(100% - 1rem)); height: 100dvh; max-height: 100dvh; margin: 0 auto 0 0; padding: 0; border: 1px solid var(--border); border-radius: 0 1.2rem 1.2rem 0; background: var(--surface); color: var(--text); }
 .mobile-navigation-sheet::backdrop { background: rgb(0 0 0 / 68%); }
 .mobile-sheet-layout { min-height: 100%; padding: 1rem; }
