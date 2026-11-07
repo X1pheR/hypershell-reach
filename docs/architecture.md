@@ -58,7 +58,7 @@ A Reach process restart is a different boundary. Raw command/script content is i
 
 With `workspace.database`, Runs, Tasks, Task leases and configured Candidates use one transactional peer-local SQLite database. Legacy configuration remains compatible; explicit offline migration switches the complete state authority. Candidate authority stays explicitly configured, never inferred from table existence. Tool and skill sources remain deployment-owned. Reach does not take ownership of Git, CIFS, rsync or other source-delivery mechanisms.
 
-The Web UI and HTTP API use explicit read-only stores. They do not reconcile Runs, repair Tasks or execute remote work.
+The Web UI and HTTP API use explicit read-only stores. They do not reconcile Runs, repair Tasks or execute remote work. The optional passive-to-primary metadata protocol is a separate native CLI/SSH transport, isolated from the browser/MCP write surfaces; source Task fencing and transactionally verified handoff are described in [Peer failback design](peer-failback.md).
 
 ## Product boundary
 

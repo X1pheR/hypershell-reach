@@ -39,7 +39,7 @@ topology:
   primary_target: docker
 ```
 
-**Configuration readiness is not synchronization:** this release contract alone does not add peer discovery, leader election, automatic failover, state replication or distributed coordination. Routing and recovery remain deployment/consumer responsibilities, and omitting `topology` preserves standalone deployments. The intended native failback semantics are specified separately in [Peer failback design](peer-failback.md), pending implementation and acceptance.
+**Configuration readiness is not production activation:** the new native passive sender is enabled only with an explicit valid `primary_target`, and still requires a compatible Home importer and deployment-owned SSH entrypoint. The sender checks for changed records every 120 seconds; Home accepts bounded Task/Run metadata and promotes only safely fenced Tasks. There is no leader election, two-way replication, Candidate replication, process/lease transfer, or automatic execution replay. See [Peer failback design](peer-failback.md) for safety and release gates. The source candidate is not deployed.
 
 ## Workspace
 

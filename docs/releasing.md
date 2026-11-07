@@ -46,3 +46,9 @@ This minor release adds `run_readonly_script` and `start_readonly_script` as exp
 ## Version 0.11 persistence upgrade
 
 This minor feature release adds opt-in schema-v2 unified persistence. Follow [Unified persistence](unified-persistence.md) for the offline copy/validate/switch migration from v0.10, current-state rollback export, writable local directory and WAL backup requirements. Keep each peer independent, preserve Home-only Candidate authority in private deployments, and retain old stores until accepted retirement. Cancelled Tasks now also require explicit reconciliation of pending mutations. No visual redesign or new browser writer is included.
+
+## Unreleased — native passive-to-primary failback candidate
+
+The next minor release adds optional `topology.mode: active|passive` and a passive `primary_target` reference to an existing authenticated SSH target. It introduces origin-qualified, bounded, ACKed Task/Run metadata convergence and a narrow CLI importer, with a two-phase Task fence/promotion/transfer lifecycle. The primary remains the only ordinary execution owner. A fixed remote SSH importer command is deployment-owned; no public browser write API or general remote shell handler is added.
+
+Activation requires: exact source/CI/browser acceptance, a compatibility-qualified image on **both** peers, a deployment-owned SSH import entrypoint with explicit node admission, independent OCI recovery, safe initial source/runtime state inventory and non-destructive pre-peer rollback export verification. `transferred` records use Task schema v3 and require the reviewed offline compatibility export before rolling back to v0.12.1 after first failback. Do not publish or deploy a mixed peer pair without the rollout order and reverse-migration gate.

@@ -245,7 +245,7 @@ class UpdateTaskInput(BaseModel):
     objective: str | None = Field(default=None, min_length=1, max_length=4_000)
     project_ref: str | None = Field(default=None, min_length=1, max_length=256)
     clear_project_ref: bool = False
-    status: TaskStatus | None = None
+    status: Literal["active", "partial", "blocked", "completed", "cancelled"] | None = None
     next_action: str | None = Field(default=None, min_length=1, max_length=2_000)
     clear_next_action: bool = False
     continuity: TaskContinuity | None = None
@@ -1818,21 +1818,30 @@ def initialize_runtime(config: ReachConfig, *, executor_service: ExecutorService
     _skill_registry_cache_at = 0.0
     _skill_registry_cache_config_signature = None
     _skill_registry_cache_source_snapshot = None
+    # A passive peer must not expire unsent recovery records during startup.
+    # It cleans only individually ACKed, retention-eligible records after sync.
+    passive_sync = (
+        _config.topology is not None
+        and _config.topology.effective_mode == "passive"
+        and _config.topology.primary_target is not None
+    )
     _run_store_instance = RunStore(
         _config.workspace.runs,
         database=_config.workspace.database,
-        completed_days=_config.retention.runs.completed_days,
+        completed_days=None if passive_sync else _config.retention.runs.completed_days,
         reconcile_modes={"sync"},
     )
-    _run_store_instance.cleanup()
+    if not passive_sync:
+        _run_store_instance.cleanup()
     _task_store_instance = TaskStore(
         _config.workspace.tasks,
         _config.workspace.trash,
         database=_config.workspace.database,
-        archived_days=_config.retention.tasks.archived_days,
+        archived_days=None if passive_sync else _config.retention.tasks.archived_days,
     )
     _task_store_instance.repair()
-    _task_store_instance.cleanup()
+    if not passive_sync:
+        _task_store_instance.cleanup()
     _candidate_store_instance = (
         CandidateStore(_config.workspace.candidates, database=_config.workspace.database)
         if _config.workspace.candidates is not None

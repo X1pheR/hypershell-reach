@@ -490,7 +490,18 @@ class RunStore:
             started_at=format_timestamp(now),
         )
         with self._write_lock():
-            self._atomic_write(record)
+            # The fence and Task-linked execution admission share the same
+            # SQLite transaction. This closes the check-to-dispatch race.
+            if self._unified is not None and record.task_id is not None:
+                with self._database(write=True) as conn:
+                    if conn.execute(
+                        "SELECT 1 FROM metadata WHERE key=?",
+                        (f"peer/v1/fence/task/{record.task_id}",)
+                    ).fetchone():
+                        raise ValueError("task is fenced for peer transfer")
+                    self._atomic_write(record)
+            else:
+                self._atomic_write(record)
         return record
 
     def get(self, run_id: str) -> RunRecord:
