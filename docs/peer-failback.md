@@ -18,6 +18,8 @@ Implementation detail: the OCI passive peer sends record batches over its existi
 
 **PF-05 — Origin and idempotency.** Imported metadata is keyed by `(origin_node_id, kind, original_id)`. Run payloads are immutable once terminal; Task updates use monotonic source revisions and reject same-revision/different-digest payloads. Retry of a committed batch returns the same receipt; no duplicated Task or Run. The primary persists each bounded batch in one SQLite transaction and returns a verifiable receipt. The passive advances its local checkpoint only after a matching receipt. Crashes before receipt simply replay the batch.
 
+**PF-06a — First-start legacy guard.** At the first start of a native passive peer, create one durable baseline of pre-existing active OCI Tasks and mark those Tasks as blocked from automatic owner handoff. This occurs even while the `primary_target` sender is disabled; an explicit CLI sync also creates the baseline if needed. Baseline Tasks still synchronize as source-owned **read-only mirrors** and are not expired by automatic source cleanup while awaiting reconciliation. Tasks created after the baseline can be automatically handed off only when all regular PF-06/07 safety conditions hold. Clearing historical blocks requires a separately reviewed reconciliation step; never treat a site restart as approval.
+
 **PF-06 — Mirror before owner handoff.** Imported active OCI Tasks are initially **read-only source-owned mirrors**. The primary must not execute them or accept Task-linked mutations while the passive owns them. A live local lease, pending mutation, ambiguous Run, unknown remote outcome or divergent Home-side Task forces a visible blocked/manual-reconciliation state. Neither an expired lease nor an SSH timeout is a reason to declare the work finished or to retry it.
 
 **PF-07 — Fenced ownership handoff.** For a safe-to-transfer Task, the passive first commits a durable fence preventing any new source-side Task mutation/execution, while preserving history. Only after proof of the fence may the primary promote a Task to its editable continuity owner. The primary returns a durable transfer receipt linking `origin_node_id/original_task_id` to `home_task_id`. Replayed transfers reuse the mapping and cannot create duplicates. The passive then records the acknowledged transfer as a versioned schema-v3 `transferred` terminal local state without erasing its history. If interrupted between fencing, promotion and acknowledgement, both sides recover from the last committed receipt without executing the task again. Do not repurpose `completed` to mean `transferred`.
@@ -40,8 +42,8 @@ Implementation detail: the OCI passive peer sends record batches over its existi
 
 1. Qualify existing Home-first MCPJungle/agent routing independently without moving production state.
 2. Implement protocol and isolated two-peer synthetic tests against compatible disposable stores.
-3. Roll out with sender disabled until both peers run the accepted compatible release.
-4. Perform read-only dry-run inventory and initial import; inspect collisions and outstanding OCI Tasks.
+3. Roll out with sender disabled (`mode: passive`, **no** `primary_target`) until both peers run the accepted compatible release. This records the one-time pre-existing OCI Task baseline without enabling any automatic handoff.
+4. Perform read-only inventory and a bounded imported-metadata dry run; inspect collisions and the five existing OCI Tasks. They must remain read-only pending separate operator reconciliation.
 5. Enable scheduled passive push only after end-to-end proof and source/consumer parity.
 6. Confirm Home-led workflows and independent OCI recovery; only then reconcile historical OCI ownership.
 

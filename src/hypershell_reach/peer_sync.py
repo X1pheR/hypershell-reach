@@ -186,6 +186,37 @@ def import_batch(config: ReachConfig, body: bytes, *, authenticated_origin: str)
             "accepted": accepted}
 
 
+def initialize_passive_baseline(config: ReachConfig) -> int:
+    """Quarantine pre-existing open Tasks before first passive synchronization.
+
+    This is a one-time, durable installation boundary, not a per-boot reset.
+    New recovery Tasks created after this boundary can transfer automatically.
+    """
+    if (config.topology is None or config.topology.effective_mode != "passive"
+            or not config.workspace.database):
+        return 0
+    with ReachDatabase(config.workspace.database).connection(write=True) as conn:
+        return _initialize_passive_baseline(conn)
+
+
+def _initialize_passive_baseline(conn) -> int:
+    if _metadata(conn, _key("baseline")) is not None:
+        return 0
+    now = datetime.now(UTC).isoformat()
+    rows = conn.execute(
+        "SELECT id FROM tasks WHERE archived=0 AND status IN ('active','partial','blocked')"
+    ).fetchall()
+    for row in rows:
+        _store_metadata(conn, _key("handoff-blocked", "task", row["id"]), {
+            "reason": "pre-existing OCI Task requires separate Home reconciliation",
+            "observed_at": now,
+        })
+    _store_metadata(conn, _key("baseline"), {
+        "established_at": now, "legacy_tasks": len(rows),
+    })
+    return len(rows)
+
+
 def prepare_batch(config: ReachConfig) -> PeerBatch:
     """Snapshot changed source metadata and advance local per-record versions only."""
     topology = config.topology
@@ -196,6 +227,7 @@ def prepare_batch(config: ReachConfig) -> PeerBatch:
     ready: list[PeerItem] = []
     size = 100
     with db.connection(write=True) as conn:
+        _initialize_passive_baseline(conn)  # CLI paths also fail closed.
         # Queries and metadata revisions share one SQLite write transaction.
         # Scan Task + Run payload snapshots rather than relying on timestamp:
         # retain toggles and abnormal Run transitions may not change a clock.
@@ -247,6 +279,9 @@ def fence_eligible(config: ReachConfig) -> list[str]:
     db = ReachDatabase(config.workspace.database)
     fenced: list[str] = []
     with db.connection(write=True) as conn:
+        if _metadata(conn, _key("baseline")) is None:
+            # Never fence Tasks before the initial source inventory exists.
+            return []
         tasks = conn.execute(
             "SELECT id,payload FROM tasks WHERE archived=0 AND status IN ('active','partial','blocked')"
             " ORDER BY id"
@@ -402,6 +437,9 @@ def prune_acknowledged(config: ReachConfig) -> dict[str, int]:
                 if removed[table] >= 500:
                     break
                 record_id, raw = row
+                if (kind == "task" and
+                        _metadata(conn, _key("handoff-blocked", "task", record_id)) is not None):
+                    continue
                 state = _metadata(conn, _key("outbound", kind, record_id))
                 if state is None or state["acked_version"] != state["version"]:
                     continue

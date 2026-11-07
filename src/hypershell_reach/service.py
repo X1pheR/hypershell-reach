@@ -18,7 +18,7 @@ from .server import app as mcp_server
 from .server import export_hermes_snapshot, initialize_runtime, set_executor_service
 from .ui import create_app as create_web_app
 from .validation import validate_configuration
-from .peer_sync import MAX_BATCH_BYTES, import_batch, passive_sync_loop, sync_once
+from .peer_sync import MAX_BATCH_BYTES, import_batch, initialize_passive_baseline, passive_sync_loop, sync_once
 
 
 class _StreamableHTTPASGIApp:
@@ -40,6 +40,9 @@ def create_service_app(config: ReachConfig) -> Starlette:
 
     @asynccontextmanager
     async def lifespan(_: Starlette):
+        # Record legacy OCI Tasks even when periodic peer sync is disabled.
+        # This prevents automatic ownership transfer at a later cutover.
+        initialize_passive_baseline(config)
         await executor.start()
         initialize_runtime(config, executor_service=executor)
         sync_task: asyncio.Task[None] | None = None

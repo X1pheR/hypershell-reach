@@ -39,7 +39,7 @@ topology:
   primary_target: docker
 ```
 
-**Configuration readiness is not production activation:** the new native passive sender is enabled only with an explicit valid `primary_target`, and still requires a compatible Home importer and deployment-owned SSH entrypoint. The sender checks for changed records every 120 seconds; Home accepts bounded Task/Run metadata and promotes only safely fenced Tasks. There is no leader election, two-way replication, Candidate replication, process/lease transfer, or automatic execution replay. See [Peer failback design](peer-failback.md) for safety and release gates. The source candidate is not deployed.
+**Configuration readiness is not production activation:** the new native passive sender is enabled only with an explicit valid `primary_target`, and still requires a compatible Home importer and deployment-owned SSH entrypoint. A passive peer without `primary_target` records its initial legacy-Task baseline but does not start periodic synchronization. Only an explicitly configured target activates the sender. The sender checks for changed records every 120 seconds; Home accepts bounded Task/Run metadata and promotes only safely fenced Tasks. There is no leader election, two-way replication, Candidate replication, process/lease transfer, or automatic execution replay. See [Peer failback design](peer-failback.md) for safety and release gates. The source candidate is not deployed.
 
 ## Workspace
 

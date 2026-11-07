@@ -15,6 +15,7 @@ from hypershell_reach.peer_sync import (
     acknowledge,
     import_batch,
     imported_items,
+    initialize_passive_baseline,
     peer_status,
     prepare_batch,
     sync_once,
@@ -36,6 +37,8 @@ def peers(tmp_path):
             payload["topology"]["primary_target"] = primary_target
         c = ReachConfig.model_validate(payload)
         ReachDatabase.create(c.workspace.database)
+        if mode == "passive":
+            initialize_passive_baseline(c)  # Mirror actual first service startup.
         return c
 
     return config("oci", "home", "passive", "docker"), config("home", "home", "active")
@@ -514,3 +517,53 @@ def test_retention_scans_beyond_first_five_hundred_unacked_runs(tmp_path):
     assert prune_acknowledged(oci) == {"runs": 1, "tasks": 0}
     with ReachDatabase(oci.workspace.database).connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 500
+
+
+def test_initial_oci_tasks_are_mirrored_but_never_auto_promoted(tmp_path):
+    from hypershell_reach.peer_sync import fence_eligible
+
+    oci, home = peers(tmp_path)
+    tasks = TaskStore(oci.workspace.tasks, oci.workspace.trash,
+                      database=oci.workspace.database)
+    legacy = tasks.create(title="Existing OCI historical operation",
+                          objective="Requires explicit operator reconciliation")
+    with ReachDatabase(oci.workspace.database).connection(write=True) as conn:
+        conn.execute("DELETE FROM metadata WHERE key='peer/v1/baseline'")
+    # Simulate the very first upgraded OCI start while legacy Task exists.
+    assert initialize_passive_baseline(oci) == 1
+    assert initialize_passive_baseline(oci) == 0
+    transfer(oci, home)
+    assert fence_eligible(oci) == []
+    assert peer_status(oci)["handoff_blocked"] == 1
+    assert imported_items(home, kind="task")[0]["record"]["id"] == legacy.id
+    with ReachDatabase(home.workspace.database).connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+
+    # A recovery Task created after the durable baseline can transfer.
+    recovery = tasks.create(title="New OCI recovery Task",
+                            objective="New outage continuity")
+    transfer(oci, home)
+    assert fence_eligible(oci) == [recovery.id]
+    transfer(oci, home)
+    assert tasks.get(legacy.id).status == "active"
+    assert tasks.get(recovery.id).status == "transferred"
+    with ReachDatabase(home.workspace.database).connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 1
+
+
+def test_initial_baseline_guards_direct_cli_sync_path(tmp_path):
+    from hypershell_reach.peer_sync import fence_eligible
+
+    oci, home = peers(tmp_path)
+    task, run, _, runs = populate(oci)
+    runs.finish(run.id, {"status": "succeeded", "exit_code": 0})
+    with ReachDatabase(oci.workspace.database).connection(write=True) as conn:
+        conn.execute("DELETE FROM metadata WHERE key='peer/v1/baseline'")
+    # Even a manually invoked CLI sync before service startup must not fence
+    # older records without an initial baseline.
+    assert fence_eligible(oci) == []
+    transfer(oci, home)  # installs baseline while collecting metadata
+    assert fence_eligible(oci) == []
+    assert peer_status(oci)["handoff_blocked"] == 1
+    assert TaskStore(oci.workspace.tasks, oci.workspace.trash,
+                     database=oci.workspace.database).get(task.id).status == "active"
