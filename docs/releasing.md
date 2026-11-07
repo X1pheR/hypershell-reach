@@ -31,6 +31,21 @@ Hypershell Reach uses Semantic Versioning. While the project is on `0.x`, minor 
 
 Repository CI validates source commits. The tag-triggered `Release` workflow validates and publishes accepted GitHub releases. Production deployment remains a separate operator action. The workflow publishes versioned container images to GHCR and records their digest in the immutable GitHub release. It does not publish to a Python package registry. Operators verify the selected image against `IMAGE.txt` and its version/revision labels before deployment; a release does not automatically replace a running peer. Reach peer replacement must be executed from an independent recovery path, never by the peer being replaced.
 
+## Version 0.13.0 native peer metadata failback
+
+Introduce optional active/passive topology and bounded one-way OCI→Home Task/Run
+metadata convergence with source Task fencing, idempotent receipts, origin-qualified
+read-only mirrors and `transferred` Task schema v3. This minor release requires
+a **compatible version on both peers** before activating a passive sender.
+
+The first passive start writes a durable one-time baseline marking existing open
+OCI Tasks as read-only legacy history pending separate reconciliation. Configure
+`mode: passive` **without** `primary_target` for the first rollout; only a later
+reviewed change enabling the existing SSH target starts periodic transfer.
+There is no support for in-place downgrade of transferred Task state to v0.12.1;
+use matching pre-upgrade application+database backups for initial rollback.
+No Candidate replication, automatic process replay or public peer writer exists.
+
 ## Version 0.12.1 Hermes content-only Skill detail parity
 
 Fix the Web UI's Hermes Skill detail route to use the same content-only eligibility as the existing inventory; an unresolved effective state is not an absent Skill. MCP Skill discovery remains governed by the full effective Hermes registry, with no change to lifecycle authority or read-only file path restrictions. Add a Hermes snapshot-backed regression for list-to-detail parity after v0.12.0 was observed returning 404 on a live, listed Hermes Skill.
@@ -46,3 +61,9 @@ This minor release adds `run_readonly_script` and `start_readonly_script` as exp
 ## Version 0.11 persistence upgrade
 
 This minor feature release adds opt-in schema-v2 unified persistence. Follow [Unified persistence](unified-persistence.md) for the offline copy/validate/switch migration from v0.10, current-state rollback export, writable local directory and WAL backup requirements. Keep each peer independent, preserve Home-only Candidate authority in private deployments, and retain old stores until accepted retirement. Cancelled Tasks now also require explicit reconciliation of pending mutations. No visual redesign or new browser writer is included.
+
+## Unreleased — native passive-to-primary failback candidate
+
+The next minor release adds optional `topology.mode: active|passive` and a passive `primary_target` reference to an existing authenticated SSH target. It introduces origin-qualified, bounded, ACKed Task/Run metadata convergence and a narrow CLI importer, with a two-phase Task fence/promotion/transfer lifecycle. The primary remains the only ordinary execution owner. A fixed remote SSH importer command is deployment-owned; no public browser write API or general remote shell handler is added.
+
+Activation requires: exact source/CI/browser acceptance, a compatibility-qualified image on **both** peers, a deployment-owned SSH import entrypoint with explicit node admission, first-start baseline quarantine of pre-existing OCI Tasks, independent OCI recovery, safe initial source/runtime state inventory and accepted pre-upgrade backups with a coherent restoration procedure. `transferred` records use Task schema v3 and must not be downgraded in place to v0.12.1. Do not publish or deploy a mixed peer pair without a reviewed release and backup/recovery plan.

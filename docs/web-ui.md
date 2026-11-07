@@ -21,6 +21,10 @@ The same sanitized read model backs:
 
 `/api/v1/summary` is intended for small internal dashboard widgets. The inventory endpoints are read-only inspection surfaces, not administration APIs.
 
+## Peer metadata (unreleased candidate)
+
+The additive `/peers` read-only page and `GET /api/v1/peers`, `/api/v1/peers/tasks` and `/api/v1/peers/runs` endpoints expose sanitized origin-qualified status, transfer mapping and imported Task/Run summaries. Imported mirrors are not executable local records. Only a fenced, authenticated transfer that has received the primary's receipt becomes a native primary Task. No browser peer endpoint writes or transfers records.
+
 ## Performance
 
 Unified operational state uses indexed bounded server queries and exact counts. Read-only tools and skills retain bounded source caches. Legacy configurations remain supported.

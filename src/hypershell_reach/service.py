@@ -18,6 +18,7 @@ from .server import app as mcp_server
 from .server import export_hermes_snapshot, initialize_runtime, set_executor_service
 from .ui import create_app as create_web_app
 from .validation import validate_configuration
+from .peer_sync import MAX_BATCH_BYTES, import_batch, initialize_passive_baseline, passive_sync_loop, sync_once
 
 
 class _StreamableHTTPASGIApp:
@@ -39,12 +40,26 @@ def create_service_app(config: ReachConfig) -> Starlette:
 
     @asynccontextmanager
     async def lifespan(_: Starlette):
+        # Record legacy OCI Tasks even when periodic peer sync is disabled.
+        # This prevents automatic ownership transfer at a later cutover.
+        initialize_passive_baseline(config)
         await executor.start()
         initialize_runtime(config, executor_service=executor)
+        sync_task: asyncio.Task[None] | None = None
+        if (config.topology is not None
+                and config.topology.effective_mode == "passive"
+                and config.topology.primary_target is not None):
+            sync_task = asyncio.create_task(passive_sync_loop(config), name="reach-peer-sync")
         try:
             async with mcp_sessions.run():
                 yield
         finally:
+            if sync_task is not None:
+                sync_task.cancel()
+                try:
+                    await sync_task
+                except asyncio.CancelledError:
+                    pass
             await executor.stop()
             set_executor_service(None)
 
@@ -113,6 +128,23 @@ def main(argv: Sequence[str] | None = None) -> None:
                 tasks_root=config.workspace.tasks, archive_root=config.workspace.trash,
                 candidates_root=config.workspace.candidates)
         print(json.dumps(receipt, sort_keys=True))
+        return
+    if arguments and arguments[0] in {"peer-import", "peer-sync-once"}:
+        command = arguments[0]
+        parser = argparse.ArgumentParser(prog=f"reach {command}")
+        parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
+        if command == "peer-import":
+            parser.add_argument("--origin", required=True, help="SSH-authenticated source node.")
+        args = parser.parse_args(arguments[1:])
+        config = load_config(args.config)
+        if command == "peer-import":
+            raw = sys.stdin.buffer.read(MAX_BATCH_BYTES + 1)
+            if len(raw) > MAX_BATCH_BYTES:
+                parser.error("peer import exceeds maximum batch size")
+            print(json.dumps(import_batch(config, raw, authenticated_origin=args.origin),
+                             sort_keys=True))
+        else:
+            print(json.dumps(asyncio.run(sync_once(config)), sort_keys=True))
         return
     if arguments and arguments[0] == "validate":
         args = _validate_parser().parse_args(arguments[1:])

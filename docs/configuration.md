@@ -22,11 +22,24 @@ Unknown fields fail validation.
 topology:
   node_id: home
   primary_node_id: home
+  mode: active  # optional explicit role; legacy topology infers mode from node IDs
 ```
 
 `topology` is an optional declarative deployment identity. `node_id` identifies the local Reach node and `primary_node_id` names the configured normal primary. Both use the same stable lowercase ID syntax as target IDs. Reach derives the local role as `primary` when both IDs match and `standby` otherwise, and exposes that safe metadata through `/api/v1/summary` when topology is configured.
 
-This contract does not add peer discovery, leader election, automatic failover, state replication or distributed coordination. Routing and recovery remain deployment/consumer responsibilities, and omitting `topology` preserves standalone deployments.
+The optional explicit `topology.mode` is `active` or `passive`. It must agree with the existing node-ID relationship: the primary node is active and other nodes are passive. Omitting it preserves the previous inferred role. The existing read-only summary retains its `primary`/`standby` role labels for API compatibility.
+
+A passive peer may additionally declare `topology.primary_target`, naming one already-configured, enabled SSH target for the primary host. This references the existing SSH address, identity, and known-hosts configuration instead of adding a second transport/credential block. For example, where the primary `node_id` is `home` but its existing SSH target ID is `docker`:
+
+```yaml
+topology:
+  node_id: oci
+  primary_node_id: home
+  mode: passive
+  primary_target: docker
+```
+
+**Configuration readiness is not production activation:** the new native passive sender is enabled only with an explicit valid `primary_target`, and still requires a compatible Home importer and deployment-owned SSH entrypoint. A passive peer without `primary_target` records its initial legacy-Task baseline but does not start periodic synchronization. Only an explicitly configured target activates the sender. The sender checks for changed records every 120 seconds; Home accepts bounded Task/Run metadata and promotes only safely fenced Tasks. There is no leader election, two-way replication, Candidate replication, process/lease transfer, or automatic execution replay. See [Peer failback design](peer-failback.md) for safety and release gates. The source candidate is not deployed.
 
 ## Workspace
 

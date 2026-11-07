@@ -135,7 +135,7 @@ Every Task YAML mutation writes a complete validated record to a temporary file 
 
 ### States and closure
 
-Task states are `active`, `partial`, `blocked`, `completed` and `cancelled`. Only `active`, `partial` and `blocked` may remain in the active Task root after normal operation or startup recovery. Only open Tasks accept new linked Runs.
+Task states are `active`, `partial`, `blocked`, `completed`, `cancelled`, and (schema v3) `transferred`. `transferred` is a native passive-peer terminal archive status set only after verified primary takeover, not a user-requested completion/cancellation. Older Reach releases cannot read this forward-only Task state; standard recovery uses the matching pre-upgrade application and SQLite backup, never an in-place downgrade of post-transfer state. Only `active`, `partial` and `blocked` may remain in the active Task root after normal operation or startup recovery. Only open Tasks accept new linked Runs.
 
 A Task-linked Reach execution that is potentially mutating creates one reserved `[reach:pending-mutation]` blocker before remote dispatch or durable asynchronous submission. Raw command/shell executions are treated as potentially mutating; managed scripts use their registry-owned `mutating` metadata. Repeated mutations keep one generated blocker representing all task-linked mutations since the last reconciliation, with the latest execution purpose as bounded context. The blocker can be released only through `update_task(reconcile_mutation=...)`, which records the supplied postcondition evidence in `continuity.validation`.
 

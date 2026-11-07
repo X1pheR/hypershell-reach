@@ -15,6 +15,7 @@ from starlette.routing import Route
 
 from .config import ReachConfig, load_config
 from .read_model import ReachReadModel
+from .peer_sync import imported_items, peer_status
 from .runs import RunStatus, RunOperation, RunExecutionMode, RunExecutionClass
 from .tasks import TaskStatus
 from .candidates import CandidateState
@@ -29,6 +30,7 @@ _NAV = (
     ("Tooling", "/tooling"),
     ("Runs", "/runs"),
     ("Tasks", "/tasks"),
+    ("Peers", "/peers"),
     ("Skills", "/skills"),
 )
 
@@ -1368,6 +1370,61 @@ def create_app(config: ReachConfig) -> Starlette:
             }
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
+    def peers(_: Request) -> Response:
+        status = peer_status(config)
+        status_rows = [{"field": str(key), "value": str(value)}
+                       for key, value in status.items()
+                       if key not in {"sources"}]
+        task_rows = []
+        run_rows = []
+        for item in imported_items(config, kind="task", limit=100):
+            record = item["record"]
+            task_rows.append({
+                "origin": item["origin"],
+                "id": record["id"],
+                "title": record["title"],
+                "status": record["status"],
+                "updated_at": record["updated_at"],
+                "authority": "Transferred to Home" if item.get("home_task_id") else "Read-only mirror",
+                "home_task": (
+                    _Link(f"/tasks/{item['home_task_id']}", item["home_task_id"])
+                    if item.get("home_task_id") else "Pending"
+                ),
+            })
+        for item in imported_items(config, kind="run", limit=100):
+            record = item["record"]
+            run_rows.append({
+                "origin": item["origin"],
+                "id": record["id"],
+                "status": record["status"],
+                "target": record["target"],
+                "started_at": record["started_at"],
+            })
+        body = (
+            _panel("Peer state", "Source-owned metadata, not execution authority.",
+                   _mapping_table(status_rows, (("field", "Field"), ("value", "Value"))))
+            + _panel("Imported Tasks", "Read-only recovery history; no automatic execution or ownership transfer.",
+                     _mapping_table(task_rows, (("origin", "Source"), ("title", "Title"),
+                           ("status", "Status"), ("updated_at", "Updated"),
+                           ("authority", "Authority"), ("home_task", "Home Task"))))
+            + _panel("Imported Runs", "Bounded, source-owned execution metadata.",
+                     _mapping_table(run_rows, (("origin", "Source"), ("id", "Run"),
+                           ("status", "Status"), ("target", "Target"), ("started_at", "Started"))))
+        )
+        return _page("Peers", "Reach replication visibility and pending handoff state.",
+                     body, active="/peers")
+
+    def api_peer_status(_: Request) -> Response:
+        return JSONResponse(peer_status(config), headers={"Cache-Control": "no-store"})
+
+    def api_peer_tasks(_: Request) -> Response:
+        return JSONResponse({"items": imported_items(config, kind="task")},
+                            headers={"Cache-Control": "no-store"})
+
+    def api_peer_runs(_: Request) -> Response:
+        return JSONResponse({"items": imported_items(config, kind="run")},
+                            headers={"Cache-Control": "no-store"})
+
     def api_skills(_: Request) -> Response:
         skills, _reports = model.skills()
         fields = ("id", "name", "description", "category", "source", "source_type")
@@ -1417,11 +1474,15 @@ def create_app(config: ReachConfig) -> Starlette:
         routes=[
             Route("/", home, methods=["GET"]),
             Route("/api/v1/summary", api_summary, methods=["GET"]),
+            Route("/api/v1/peers", api_peer_status, methods=["GET"]),
+            Route("/api/v1/peers/tasks", api_peer_tasks, methods=["GET"]),
+            Route("/api/v1/peers/runs", api_peer_runs, methods=["GET"]),
             Route("/api/v1/skills", api_skills, methods=["GET"]),
             Route("/api/v1/tools", api_tools, methods=["GET"]),
             Route("/api/v1/tasks", api_tasks, methods=["GET"]),
             Route("/api/v1/runs", api_runs, methods=["GET"]),
             Route("/api/v1/candidates", api_candidates, methods=["GET"]),
+            Route("/peers", peers, methods=["GET"]),
             Route("/targets", targets, methods=["GET"]),
             Route("/tooling", tooling, methods=["GET"]),
             Route("/tooling/{tool_id}", tool_detail, methods=["GET"]),

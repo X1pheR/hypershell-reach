@@ -16,14 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from .database import ReachDatabase, database_for, timestamp
 
-TaskStatus = Literal["active", "partial", "blocked", "completed", "cancelled"]
+TaskStatus = Literal["active", "partial", "blocked", "completed", "cancelled", "transferred"]
 EvidenceClass = Literal["observed", "configured", "documented", "planned", "unknown"]
 AssumptionImpact = Literal["low", "medium", "high"]
 BoundedTaskText = Annotated[str, Field(min_length=1, max_length=1_000)]
 
 _TASK_ID = re.compile(r"^task-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{12}$")
 _OPEN_STATUSES = {"active", "partial", "blocked"}
-_TERMINAL_STATUSES = {"completed", "cancelled"}
+_TERMINAL_STATUSES = {"completed", "cancelled", "transferred"}
 PENDING_MUTATION_BLOCKER_PREFIX = "[reach:pending-mutation]"
 _TASK_LEASE_ID = re.compile(r"^tlease-[0-9a-f]{32}$")
 _TASK_LEASE_MIN_SECONDS = 30
@@ -92,7 +92,7 @@ class TaskExecutionLease(BaseModel):
 class TaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[1, 2, 3] = 2
     revision: int = Field(default=0, ge=0)
     id: str
     title: str = Field(min_length=1, max_length=200)
@@ -110,8 +110,10 @@ class TaskRecord(BaseModel):
     def validate_schema_revision(self) -> "TaskRecord":
         if self.schema_version == 1 and self.revision != 0:
             raise ValueError("schema v1 task revision must be zero")
-        if self.schema_version == 2 and self.revision < 1:
-            raise ValueError("schema v2 task revision must be at least one")
+        if self.schema_version >= 2 and self.revision < 1:
+            raise ValueError("Task schema v2+ revision must be at least one")
+        if self.status == "transferred" and self.schema_version != 3:
+            raise ValueError("transferred Task requires schema v3")
         return self
 
     def summary(self) -> dict[str, object]:
@@ -219,7 +221,10 @@ class TaskStore:
         self._require_writable()
         self._validate_task_id(task_id)
         if self.database is not None:
-            with self.database.connection(write=True):
+            with self.database.connection(write=True) as conn:
+                fence_key = f"peer/v1/fence/task/{task_id}"
+                if conn.execute("SELECT 1 FROM metadata WHERE key=?", (fence_key,)).fetchone():
+                    raise ValueError(f"task is fenced for peer transfer: {task_id}")
                 yield
             return
         path = self.lock_root / f"{task_id}.lock"
@@ -698,6 +703,11 @@ class TaskStore:
         if self.database is not None:
             self._validate_task_id(task_id)
             with self.database.connection() as conn:
+                if conn.execute(
+                    "SELECT 1 FROM metadata WHERE key=?",
+                    (f"peer/v1/fence/task/{task_id}",)
+                ).fetchone():
+                    raise ValueError(f"task is fenced for peer transfer: {task_id}")
                 row = conn.execute("SELECT archived,payload FROM tasks WHERE id=?", (task_id,)).fetchone()
             if row is None:
                 raise ValueError(f"unknown task: {task_id}")
@@ -907,6 +917,8 @@ class TaskStore:
         task_lease_id: str | None = None,
     ) -> TaskRecord:
         self._require_writable()
+        if status == "transferred":
+            raise ValueError("transferred status requires verified native peer handoff")
         self._validate_edit_args(
             project_ref=project_ref,
             clear_project_ref=clear_project_ref,
@@ -1036,6 +1048,8 @@ class TaskStore:
         task_lease_id: str | None = None,
     ) -> TaskRecord:
         self._require_writable()
+        if status not in {"completed", "cancelled"}:
+            raise ValueError("only completed/cancelled may use ordinary Task close")
         self._validate_edit_args(
             project_ref=project_ref,
             clear_project_ref=clear_project_ref,
