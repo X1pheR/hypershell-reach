@@ -445,36 +445,6 @@ def test_equivalent_primary_task_is_quarantined_before_fencing(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 1
 
 
-def test_backward_compatible_export_preserves_original_and_origin_mapping(tmp_path):
-    from hypershell_reach.peer_rollback import export_pre_peer_state
-    from hypershell_reach.peer_sync import fence_eligible
-    oci, home = peers(tmp_path)
-    task, run, tasks, runs = populate(oci)
-    runs.finish(run.id, {"status": "succeeded", "exit_code": 0})
-    transfer(oci, home)
-    fence_eligible(oci)
-    transfer(oci, home)
-    assert tasks.get(task.id).schema_version == 3
-    destination = tmp_path / "previous-version.sqlite3"
-    receipt = export_pre_peer_state(oci, destination)
-    assert receipt["translated_tasks"] == 1
-    assert receipt["source_unchanged"] is True
-    assert tasks.get(task.id).status == "transferred"
-    previous = TaskStore(tmp_path / "old-runs", tmp_path / "old-trash",
-                         database=destination).get(task.id)
-    assert previous.status == "cancelled"
-    assert previous.schema_version == 2
-    assert previous.archived_at is not None
-    with ReachDatabase(destination).connection() as conn:
-        mapping = conn.execute(
-            "SELECT value FROM metadata WHERE key=?",
-            (f"peer/v1/mapping/home/{task.id}",)
-        ).fetchone()
-        assert mapping is not None
-    with pytest.raises(ValueError, match="new absolute path"):
-        export_pre_peer_state(oci, destination)
-
-
 def test_transferred_status_cannot_be_forged_via_regular_task_mutations(tmp_path):
     from hypershell_reach.server import UpdateTaskInput
     oci, _ = peers(tmp_path)
@@ -486,3 +456,61 @@ def test_transferred_status_cannot_be_forged_via_regular_task_mutations(tmp_path
     with pytest.raises(ValueError, match="only completed/cancelled"):
         tasks.close(task.id, status="transferred")
     assert tasks.get(task.id).status == "active"
+
+
+def test_fencing_skips_first_hundred_blocked_tasks(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from hypershell_reach.peer_sync import fence_eligible
+    from hypershell_reach.tasks import TaskRecord, new_task_id
+
+    oci, home = peers(tmp_path)
+    ids = []
+    with ReachDatabase(oci.workspace.database).connection(write=True) as conn:
+        for i in range(101):
+            now = (datetime(2026, 11, 7, tzinfo=UTC) + timedelta(microseconds=i))
+            stamp = now.isoformat().replace("+00:00", "Z")
+            record = TaskRecord(
+                schema_version=2, revision=1, id=new_task_id(now),
+                title=f"Distinct recovery item {i}", objective=f"Restore source item {i}",
+                status="active", created_at=stamp, updated_at=stamp,
+            )
+            TaskStore._put(conn, record, archived=False)
+            ids.append(record.id)
+    for _ in range(3):
+        transfer(oci, home)
+    assert not prepare_batch(oci).items
+    with ReachDatabase(oci.workspace.database).connection(write=True) as conn:
+        for task_id in ids[:100]:
+            conn.execute("INSERT INTO metadata(key,value) VALUES (?,?)", (
+                f"peer/v1/handoff-blocked/task/{task_id}", '{"reason":"manual review"}'))
+    assert fence_eligible(oci) == [ids[-1]]
+
+
+def test_retention_scans_beyond_first_five_hundred_unacked_runs(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from hypershell_reach.peer_sync import _digest, prune_acknowledged
+    from hypershell_reach.runs import RunRecord, RunStore, new_run_id
+
+    oci, _ = peers(tmp_path)
+    oci.retention.runs.completed_days = 0
+    last = None
+    with ReachDatabase(oci.workspace.database).connection(write=True) as conn:
+        for i in range(501):
+            now = datetime(2026, 11, 6, tzinfo=UTC) + timedelta(microseconds=i)
+            stamp = now.isoformat().replace("+00:00", "Z")
+            last = RunRecord(schema_version=4, id=new_run_id(now),
+                             operation="run_command", target="docker",
+                             timeout_seconds=5, may_mutate=False,
+                             started_at=stamp, ended_at=stamp,
+                             status="succeeded", ambiguous=False)
+            RunStore._put(conn, last, unified=True)
+        assert last is not None
+        conn.execute("INSERT INTO metadata(key,value) VALUES (?,?)", (
+            f"peer/v1/outbound/run/{last.id}",
+            json.dumps({"version": 1, "acked_version": 1, "digest":
+                        _digest({"record": last.model_dump(), "fenced": False})})))
+    assert prune_acknowledged(oci) == {"runs": 1, "tasks": 0}
+    with ReachDatabase(oci.workspace.database).connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 500

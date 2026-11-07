@@ -143,16 +143,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         else:
             print(json.dumps(asyncio.run(sync_once(config)), sort_keys=True))
         return
-    if arguments and arguments[0] == "peer-rollback-export":
-        from .peer_rollback import export_pre_peer_state
-        parser = argparse.ArgumentParser(prog="reach peer-rollback-export",
-                                         description="Create a new v0.12-compatible database snapshot; quiesce writers before rollback cutover.")
-        parser.add_argument("--config", help="Configuration file. Defaults to REACH_CONFIG.")
-        parser.add_argument("--output", required=True, help="New absolute path for non-destructive SQLite export.")
-        args = parser.parse_args(arguments[1:])
-        print(json.dumps(export_pre_peer_state(load_config(args.config), args.output),
-                         sort_keys=True))
-        return
     if arguments and arguments[0] == "validate":
         args = _validate_parser().parse_args(arguments[1:])
         report = validate_configuration(args.config)

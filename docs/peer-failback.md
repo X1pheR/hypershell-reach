@@ -47,10 +47,10 @@ Implementation detail: the OCI passive peer sends record batches over its existi
 
 No new automatic writer should be activated by the explicit mode configuration alone.
 
-## Release/rollback gate (not yet accepted)
+## Deployment and backup gate
 
-The new `transferred` Task state is schema v3 and is intentionally **not readable by v0.12.1**. Do not activate the passive sender merely because a candidate image is healthy. Both peers must run a fully accepted compatible release first. Retain exact peer-local online SQLite backups and the accepted new image/configuration.
+The transferred Task is an internal schema-v3 terminal record and cannot be read by Reach v0.12.1. This is an intentional forward-only contract change; the SQLite database schema remains v2. We do **not** provide old-reader conversion or redefine transferred Tasks as cancelled.
 
-A *non-destructive* compatibility export now exists: `reach peer-rollback-export --config <path> --output <new-absolute-path>`. It creates an application-consistent SQLite snapshot, converts the v3 `transferred` source archives into v2 `cancelled` archives for older-reader compatibility, and preserves origin-to-Home mappings as metadata. It never changes the live database. This export has synthetic tests, but its exact **stopped-writer cutover and v0.12.1 consumer acceptance** have not yet been accepted. Do not switch image or replace a database while either Reach peer is serving. Preserve preimage, output receipt and review changed-scope migration proof before promotion.
+Before deployment, preserve each site's application-consistent SQLite backup, matching image/configuration and source-to-primary transfer maps. Validate backups, recovery, and the independent OCI path before activating the passive sender. If the new release must be abandoned before any transfer, restore the coherent pre-upgrade application-and-database snapshot. Once Tasks have transferred, restore according to an explicit current-state recovery plan; do not downgrade in place or silently erase accepted Home work.
 
 The source candidate includes synthetic two-peer import, loss-of-ACK replay, stale-version rejection, active lease/pending-mutation/ambiguous-Run fencing and Task takeover tests, but no live SSH-to-Home acceptance or consumer routing change has been performed.

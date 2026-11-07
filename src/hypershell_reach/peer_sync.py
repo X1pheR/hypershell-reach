@@ -249,9 +249,11 @@ def fence_eligible(config: ReachConfig) -> list[str]:
     with db.connection(write=True) as conn:
         tasks = conn.execute(
             "SELECT id,payload FROM tasks WHERE archived=0 AND status IN ('active','partial','blocked')"
-            " ORDER BY id LIMIT 100"
+            " ORDER BY id"
         ).fetchall()
         for row in tasks:
+            if len(fenced) >= 100:
+                break
             task_id, raw = row
             fence_key = _key("fence", "task", task_id)
             if (_metadata(conn, fence_key) is not None or
@@ -394,9 +396,11 @@ def prune_acknowledged(config: ReachConfig) -> dict[str, int]:
                 continue
             cutoff = (now - timedelta(days=retention)).timestamp()
             rows = conn.execute(
-                f"SELECT id,payload FROM {table} WHERE {condition} AND {time_field}<=? ORDER BY id LIMIT 500",
+                f"SELECT id,payload FROM {table} WHERE {condition} AND {time_field}<=? ORDER BY id",
                 (cutoff,)).fetchall()
             for row in rows:
+                if removed[table] >= 500:
+                    break
                 record_id, raw = row
                 state = _metadata(conn, _key("outbound", kind, record_id))
                 if state is None or state["acked_version"] != state["version"]:
