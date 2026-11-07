@@ -304,6 +304,27 @@ class Topology(BaseModel):
 
     node_id: str = Field(min_length=1, max_length=63)
     primary_node_id: str = Field(min_length=1, max_length=63)
+    # A declared mode cannot contradict the already-established node identity.
+    mode: Literal["active", "passive"] | None = None
+    # A reference to an existing SSH target, not a second host/credential definition.
+    primary_target: str | None = None
+
+    @property
+    def effective_mode(self) -> Literal["active", "passive"]:
+        if self.mode is not None:
+            return self.mode
+        return "active" if self.node_id == self.primary_node_id else "passive"
+
+    @model_validator(mode="after")
+    def validate_mode_identity(self) -> "Topology":
+        inferred = "active" if self.node_id == self.primary_node_id else "passive"
+        if self.mode is not None and self.mode != inferred:
+            raise ValueError("topology mode contradicts primary node identity")
+        if self.primary_target is not None and not _TARGET_ID.fullmatch(self.primary_target):
+            raise ValueError("invalid primary target ID")
+        if self.primary_target is not None and inferred == "active":
+            raise ValueError("active topology does not use a primary target")
+        return self
 
     @field_validator("node_id", "primary_node_id")
     @classmethod
@@ -332,6 +353,10 @@ class ReachConfig(BaseModel):
         invalid = sorted(target_id for target_id in self.targets if not _TARGET_ID.fullmatch(target_id))
         if invalid:
             raise ValueError(f"invalid target IDs: {', '.join(invalid)}")
+        if self.topology is not None and self.topology.primary_target is not None:
+            primary = self.targets.get(self.topology.primary_target)
+            if primary is None or not primary.enabled:
+                raise ValueError("primary target must refer to an enabled existing SSH target")
         unknown_state_targets = sorted(
             {
                 source.state.target

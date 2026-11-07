@@ -320,6 +320,58 @@ def test_candidate_workspace_path_is_optional_and_must_be_absolute() -> None:
         ReachConfig.model_validate(payload)
 
 
+def test_explicit_active_and_passive_mode_preserve_existing_topology_identity() -> None:
+    active = _config()
+    active["topology"] = {
+        "node_id": "home", "primary_node_id": "home", "mode": "active",
+    }
+    primary = ReachConfig.model_validate(active)
+    assert primary.topology.effective_mode == "active"
+
+    passive = _config()
+    passive["topology"] = {
+        "node_id": "oci", "primary_node_id": "home",
+        "mode": "passive", "primary_target": "docker",
+    }
+    standby = ReachConfig.model_validate(passive)
+    assert standby.topology.effective_mode == "passive"
+    assert standby.topology.primary_target == "docker"
+
+
+def test_legacy_topology_without_mode_remains_compatible() -> None:
+    payload = _config()
+    payload["topology"] = {"node_id": "oci", "primary_node_id": "home"}
+    assert ReachConfig.model_validate(payload).topology.effective_mode == "passive"
+
+
+def test_explicit_mode_cannot_contradict_primary_identity() -> None:
+    payload = _config()
+    payload["topology"] = {
+        "node_id": "oci", "primary_node_id": "home", "mode": "active",
+    }
+    with pytest.raises(ValidationError, match="topology mode"):
+        ReachConfig.model_validate(payload)
+    payload["topology"] = {
+        "node_id": "home", "primary_node_id": "home", "mode": "passive",
+    }
+    with pytest.raises(ValidationError, match="topology mode"):
+        ReachConfig.model_validate(payload)
+
+
+def test_passive_primary_target_must_be_known_and_enabled() -> None:
+    payload = _config()
+    payload["topology"] = {
+        "node_id": "oci", "primary_node_id": "home",
+        "mode": "passive", "primary_target": "missing",
+    }
+    with pytest.raises(ValidationError, match="primary target"):
+        ReachConfig.model_validate(payload)
+    payload["topology"]["primary_target"] = "docker"
+    payload["targets"]["docker"]["enabled"] = False
+    with pytest.raises(ValidationError, match="primary target"):
+        ReachConfig.model_validate(payload)
+
+
 def test_topology_is_optional_and_uses_stable_node_ids() -> None:
     config = ReachConfig.model_validate(_config())
     assert config.topology is None
