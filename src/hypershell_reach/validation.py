@@ -200,13 +200,17 @@ def _skill_source_lines(config: ReachConfig) -> tuple[list[str], int]:
             lines.append(f"    Effective locally: {report['effective_count']}")
         else:
             assert source.state is not None
-            target = config.targets[source.state.target]
-            lines.extend(
-                [
-                    f"    State target: {source.state.target} — {target.display_name} ({target.ssh.host})",
-                    "    Effective state: not checked (network disabled)",
-                ]
-            )
+            if source.state.mode == "snapshot":
+                lines.append("    Effective state: local snapshot (network disabled)")
+            else:
+                assert source.state.target is not None
+                target = config.targets[source.state.target]
+                lines.extend(
+                    [
+                        f"    State target: {source.state.target} — {target.display_name} ({target.ssh.host})",
+                        "    Effective state: not checked (network disabled)",
+                    ]
+                )
     return lines, errors
 
 

@@ -31,6 +31,10 @@ Hypershell Reach uses Semantic Versioning. While the project is on `0.x`, minor 
 
 Repository CI validates source commits. The tag-triggered `Release` workflow validates and publishes accepted GitHub releases. Production deployment remains a separate operator action. The workflow publishes versioned container images to GHCR and records their digest in the immutable GitHub release. It does not publish to a Python package registry. Operators verify the selected image against `IMAGE.txt` and its version/revision labels before deployment; a release does not automatically replace a running peer. Reach peer replacement must be executed from an independent recovery path, never by the peer being replaced.
 
+## Version 0.13.1 Hermes snapshot validation correction
+
+Fix the nonblocking `reach validate` reporter crash for `HermesSkillState(mode="snapshot")`, where `target=None` is intentionally allowed and no network lookup is required. CLI validation now reports a local snapshot and leaves remote Hermes source behavior, Task/Run peer protocols and deployment interfaces unchanged. Existing native peer configuration remains compatible with v0.13.0.
+
 ## Version 0.13.0 native peer metadata failback
 
 Introduce optional active/passive topology and bounded one-way OCI→Home Task/Run

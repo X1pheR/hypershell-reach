@@ -158,6 +158,23 @@ def test_validate_hermes_source_does_not_require_network_state(tmp_path: Path) -
     assert "Skills: 1" in report.text
 
 
+def test_validate_hermes_snapshot_source_without_target(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, hermes=True)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload["sources"]["skills"][0]["state"] = {"mode": "snapshot", "snapshot_path": str(tmp_path / "skills")}
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    report = validate_configuration(config_path)
+
+    assert report.valid is True
+    assert report.error_count == 0
+    assert "Effective state: local snapshot (network disabled)" in report.text
+    assert "State target: None" not in report.text
+    with pytest.raises(SystemExit) as excinfo:
+        main(["validate", "--config", str(config_path)])
+    assert excinfo.value.code == 0
+
+
 def test_validate_fails_when_credential_path_is_missing(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path, missing_identity=True)
 
